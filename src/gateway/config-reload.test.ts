@@ -2397,126 +2397,154 @@ describe("startGatewayConfigReloader", () => {
     },
   );
 
-  it("applies an RPC write receipt inside its originating gateway root", async () => {
-    const root = tempDirs.make("openclaw-config-receipt-");
-    const configPath = nodePath.join(root, "openclaw.json");
-    const initialConfig = {
-      gateway: { reload: {} },
-      hooks: { enabled: false },
-    } satisfies OpenClawConfig;
-    const nextConfig = {
-      gateway: { reload: {} },
-      hooks: { enabled: true },
-    } satisfies OpenClawConfig;
-    await writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`);
-    resetConfigRuntimeState();
-    setRuntimeConfigSnapshot(initialConfig, initialConfig);
-    initializePublishedConfigRuntimeEnv(initialConfig);
-
-    let releaseHotReload!: () => void;
-    const hotReloadGate = new Promise<void>((resolve) => {
-      releaseHotReload = resolve;
-    });
-    let markHotReloadStarted!: () => void;
-    const hotReloadStarted = new Promise<void>((resolve) => {
-      markHotReloadStarted = resolve;
-    });
-    const onHotReload = vi.fn(
-      async (
-        plan: GatewayReloadPlan,
-        runtimeConfig: OpenClawConfig,
-        ownership: GatewayConfigReloadTransactionOwnership,
-      ) => {
-        const competingRootCount = getActiveGatewayRootWorkCount({ excludeCurrent: true });
-        markHotReloadStarted();
-        await hotReloadGate;
-        ownership.markRuntimeCommitted(runtimeConfig, plan);
-        return { status: "applied" as const, competingRootCount };
-      },
-    );
-    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-    try {
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-        const configIo = createConfigIO({ configPath, pluginValidation: "skip" });
-        const reloader = startGatewayConfigReloader({
-          testDebounceMs: 0,
-          initialConfig,
-          initialSnapshotRawHash: (await configIo.readConfigFileSnapshot()).hash ?? null,
-          initialAuthoredConfig: initialConfig,
-          initialSnapshotValid: true,
-          initialSnapshotIssues: [],
-          readSnapshot: readConfigFileSnapshotForRuntimeTransaction,
-          promoteSnapshot: async () => true,
-          initialPluginInstallRecords: {},
-          readPluginInstallRecords: async () => ({}),
-          subscribeToWrites: (listener) =>
-            registerConfigWriteListener(listener, {
-              ownsRuntimeActivationFor: configPath,
-              preCommitRuntimePreflight: async (sourceConfig) => ({
-                runtimeConfig: sourceConfig,
-                compareConfig: sourceConfig,
-              }),
-            }),
-          onConfigChange: async () => {},
-          onConfigApplied: async () => {},
-          onConfigRevisionApplied: () => {},
-          onConfigAccepted: async () => {},
-          onEffectiveConfigUnchanged: async () => ({ rollback: async () => {} }),
-          onNoopConfigCommit: async (plan, runtimeConfig, ownership) => {
-            ownership.markRuntimeCommitted(runtimeConfig, plan);
-          },
-          onHotReload: async (plan, runtimeConfig, ownership) =>
-            (await onHotReload(plan, runtimeConfig, ownership)).status,
-          onRestart: async () => {
-            throw new Error("unexpected restart");
-          },
-          runTransaction: runWithGatewayIndependentRootWorkAdmission,
-          log,
-          watchPath: configPath,
-        });
-
-        try {
-          const request = tryBeginGatewayRootWorkAdmission();
-          if (!request) {
-            throw new Error("expected gateway request admission");
-          }
-          const writeResult = await request.run(async () => {
-            const prepared = await readConfigFileSnapshotForWrite();
-            return await commitGatewayConfigWrite({
-              snapshot: prepared.snapshot,
-              writeOptions: prepared.writeOptions,
-              nextConfig,
-              awaitRuntimeApplication: true,
-            });
-          });
-          try {
-            let settled = false;
-            void writeResult.application?.then(() => {
-              settled = true;
-            });
-
-            await vi.advanceTimersByTimeAsync(0);
-            await hotReloadStarted;
-            expect(onHotReload).toHaveBeenCalledOnce();
-            expect(settled).toBe(false);
-
-            releaseHotReload();
-            await expect(writeResult.application).resolves.toBe("applied");
-            await expect(onHotReload.mock.results[0]?.value).resolves.toMatchObject({
-              competingRootCount: 0,
-            });
-          } finally {
-            request.release();
-          }
-        } finally {
-          await reloader.stop();
-        }
-      });
-    } finally {
+  it.each(["direct", "watcher-echo", "failed-cleanup", "committed"] as const)(
+    "settles an RPC write inside its originating gateway root (%s)",
+    async (scenario) => {
+      const root = tempDirs.make("openclaw-config-receipt-");
+      const configPath = nodePath.join(root, "openclaw.json");
+      const initialConfig = {
+        gateway: { reload: {} },
+        hooks: { enabled: false },
+      } satisfies OpenClawConfig;
+      const nextConfig = {
+        gateway: { reload: {} },
+        hooks: { enabled: true },
+      } satisfies OpenClawConfig;
+      await writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`);
       resetConfigRuntimeState();
-    }
-  });
+      setRuntimeConfigSnapshot(initialConfig, initialConfig);
+      initializePublishedConfigRuntimeEnv(initialConfig);
+
+      const watcher = createWatcherMock();
+      vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+      const hotReloadGate = createDeferred();
+      const hotReloadStarted = createDeferred();
+      const competingRootCounts: number[] = [];
+      const onHotReload = vi.fn(
+        async (
+          plan: GatewayReloadPlan,
+          runtimeConfig: OpenClawConfig,
+          ownership: GatewayConfigReloadTransactionOwnership,
+        ) => {
+          competingRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+          hotReloadStarted.resolve();
+          await hotReloadGate.promise;
+          if (scenario !== "direct" && competingRootCounts.length === 1) {
+            if (scenario === "committed") {
+              ownership.markRuntimeCommitted(runtimeConfig, plan);
+            }
+            watcher.emit("change", configPath);
+            const superseded = new GatewayConfigReloadSupersededError();
+            throw new PluginRuntimeApplicationError(
+              "Plugin replacement superseded",
+              {
+                operationId: "config-write",
+                generation: 1,
+                pluginIds: ["notes"],
+                phase: scenario === "committed" ? "activate" : "drain",
+                committed: scenario === "committed",
+              },
+              {
+                cause:
+                  scenario === "failed-cleanup"
+                    ? new AggregateError([superseded, new Error("cleanup failed")])
+                    : superseded,
+              },
+            );
+          }
+          ownership.markRuntimeCommitted(runtimeConfig, plan);
+          return "applied" as const;
+        },
+      );
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          const configIo = createConfigIO({ configPath, pluginValidation: "skip" });
+          const reloader = startGatewayConfigReloader({
+            testDebounceMs: 0,
+            initialConfig,
+            initialSnapshotRawHash: (await configIo.readConfigFileSnapshot()).hash ?? null,
+            initialAuthoredConfig: initialConfig,
+            initialSnapshotValid: true,
+            initialSnapshotIssues: [],
+            readSnapshot: readConfigFileSnapshotForRuntimeTransaction,
+            promoteSnapshot: async () => true,
+            initialPluginInstallRecords: {},
+            readPluginInstallRecords: async () => ({}),
+            subscribeToWrites: (listener) =>
+              registerConfigWriteListener(listener, {
+                ownsRuntimeActivationFor: configPath,
+                preCommitRuntimePreflight: async (sourceConfig) => ({
+                  runtimeConfig: sourceConfig,
+                  compareConfig: sourceConfig,
+                }),
+              }),
+            onConfigChange: async () => {},
+            onConfigApplied: async () => {},
+            onConfigRevisionApplied: () => {},
+            onConfigAccepted: async () => {},
+            onEffectiveConfigUnchanged: async () => ({ rollback: async () => {} }),
+            onNoopConfigCommit: async (plan, runtimeConfig, ownership) => {
+              ownership.markRuntimeCommitted(runtimeConfig, plan);
+            },
+            onHotReload,
+            onRestart: async () => {
+              throw new Error("unexpected restart");
+            },
+            runTransaction: runWithGatewayIndependentRootWorkAdmission,
+            log,
+            watchPath: configPath,
+          });
+
+          try {
+            const request = tryBeginGatewayRootWorkAdmission();
+            if (!request) {
+              throw new Error("expected gateway request admission");
+            }
+            const writeResult = await request.run(async () => {
+              const prepared = await readConfigFileSnapshotForWrite();
+              return await commitGatewayConfigWrite({
+                snapshot: prepared.snapshot,
+                writeOptions: prepared.writeOptions,
+                nextConfig,
+                awaitRuntimeApplication: true,
+              });
+            });
+            try {
+              let settled = false;
+              void writeResult.application?.then(() => {
+                settled = true;
+                request.release();
+              });
+
+              await vi.advanceTimersByTimeAsync(0);
+              await hotReloadStarted.promise;
+              expect(onHotReload).toHaveBeenCalledOnce();
+              expect(settled).toBe(false);
+
+              hotReloadGate.resolve();
+              await vi.waitFor(() => expect(settled).toBe(true));
+              await vi.runAllTimersAsync();
+              const applied = scenario === "direct" || scenario === "watcher-echo";
+              await expect(writeResult.application).resolves.toBe(applied ? "applied" : "failed");
+              expect(competingRootCounts).toEqual(scenario === "watcher-echo" ? [0, 0] : [0]);
+              if (applied) {
+                expect(log.error).not.toHaveBeenCalled();
+              }
+            } finally {
+              hotReloadGate.resolve();
+              request.release();
+            }
+          } finally {
+            await reloader.stop();
+          }
+        });
+      } finally {
+        resetConfigRuntimeState();
+      }
+    },
+  );
 
   it("reports when a committed hot reload requires recovery restart", async () => {
     const application = createRuntimeConfigWriteApplication();

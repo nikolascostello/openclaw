@@ -151,6 +151,16 @@ function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   };
 }
 
+function isConfigReloadSuperseded(error: unknown): boolean {
+  // Only completed rollback preserves the direct cause. Cleanup failures and
+  // published replacements must settle instead of transferring the write.
+  const cause =
+    error instanceof PluginRuntimeApplicationError && !error.details.committed
+      ? error.cause
+      : error;
+  return cause instanceof GatewayConfigReloadSupersededError;
+}
+
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
@@ -426,7 +436,7 @@ export function startGatewayConfigReloader(opts: {
       // transaction. Only downstream signal delivery may coalesce.
       await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
     } catch (err) {
-      if (err instanceof GatewayConfigReloadSupersededError) {
+      if (isConfigReloadSuperseded(err)) {
         opts.log.info(`config restart superseded: ${String(err)}`);
       } else {
         opts.log.error(`config restart failed: ${String(err)}`);
@@ -1136,7 +1146,7 @@ export function startGatewayConfigReloader(opts: {
       });
       await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
-      const superseded = err instanceof GatewayConfigReloadSupersededError;
+      const superseded = isConfigReloadSuperseded(err);
       const transferredToWatcher =
         superseded && attemptedCandidate !== null && watcherIntentCandidate === attemptedCandidate;
       if (!transferredToWatcher) {
@@ -1260,12 +1270,7 @@ export function startGatewayConfigReloader(opts: {
             await promoteAcceptedSnapshot(snapshot, "plugin-lifecycle");
             return runtime;
           } catch (error) {
-            const supersededBeforeCommit =
-              !committed &&
-              (error instanceof GatewayConfigReloadSupersededError ||
-                (error instanceof PluginRuntimeApplicationError &&
-                  !error.details.committed &&
-                  error.cause instanceof GatewayConfigReloadSupersededError));
+            const supersededBeforeCommit = !committed && isConfigReloadSuperseded(error);
             // Rebase one harmless echo before activation or after rollback. Changed bytes,
             // failed cleanup, and every published generation must never replay.
             if (attempt > 0 || !supersededBeforeCommit) {
