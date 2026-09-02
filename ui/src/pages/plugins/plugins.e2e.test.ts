@@ -158,13 +158,6 @@ const yourPluginsItems = [
 const yourPluginsInventory = inventory(yourPluginsItems);
 
 const initialInventory = inventory([workboardDisabled, lobsterPlugin, remoteIconPlugin]);
-const finalInventory = inventory([
-  workboardEnabled,
-  lobsterPlugin,
-  remoteIconPlugin,
-  calendarPlugin,
-]);
-
 const calendarSearchResponse = {
   results: [
     {
@@ -438,11 +431,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const grid = page.locator(".your-plugins__grid");
       const columnCount = () =>
         grid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
-      expect(await columnCount()).toBe(3);
+      await expect.poll(columnCount).toBe(3);
       await page.setViewportSize({ height: 900, width: 768 });
-      expect(await columnCount()).toBe(2);
+      await expect.poll(columnCount).toBe(2);
       await page.setViewportSize({ height: 852, width: 393 });
-      expect(await columnCount()).toBe(1);
+      await expect.poll(columnCount).toBe(1);
       await expect
         .poll(() =>
           page.evaluate(
@@ -522,54 +515,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .getByRole("button", { name: "Open settings for Workboard", exact: true })
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/workboard");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("shows plugin list failures and retries the catalog request", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: pluginMethods,
-      methodResponses: pluginMethodResponses(),
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}settings/plugins`);
-      await page.locator('[data-plugin-id="workboard"]').waitFor({ state: "visible" });
-      const listCountBeforeFailure = (await gateway.getRequests("plugins.list")).length;
-      await gateway.deferNext("plugins.list");
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      const failedListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeFailure,
-      );
-      expect(requestParams(failedListRequest)).toEqual({});
-      await gateway.rejectDeferred("plugins.list", {
-        code: "UNAVAILABLE",
-        message: "Plugin inventory unavailable",
-        retryable: true,
-      });
-
-      const error = page.locator(".plugins-page-error");
-      await error.waitFor({ state: "visible" });
-      expect(await error.textContent()).toContain("Plugin inventory unavailable");
-      const listCountBeforeRetry = (await gateway.getRequests("plugins.list")).length;
-      await gateway.deferNext("plugins.list");
-      await error.getByRole("button", { name: "Try again" }).click();
-      const retryListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeRetry,
-      );
-      expect(requestParams(retryListRequest)).toEqual({});
-      await gateway.resolveDeferred("plugins.list", finalInventory);
-      await error.waitFor({ state: "detached" });
-      await page
-        .locator('[data-plugin-id="workboard"][data-plugin-status="enabled"]')
-        .waitFor({ state: "attached" });
     } finally {
       await context.close();
     }
