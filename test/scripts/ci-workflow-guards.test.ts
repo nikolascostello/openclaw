@@ -1585,11 +1585,14 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
 }
 
-function runCheckShardFixture(options: {
+function runCheckTaskFixture(options: {
+  checkoutBase?: boolean;
+  eventName?: "pull_request" | "push" | "workflow_dispatch";
   frozenTarget: boolean;
-  scripts: string[];
-  task?: "guards" | "test-types";
+  scripts: readonly string[];
+  task?: "bundled-protocol" | "guards" | "npm-lock" | "test-types";
 }): {
+  baseSha: string;
   calls: string[];
   output: string;
   status: number | null;
@@ -1597,6 +1600,8 @@ function runCheckShardFixture(options: {
   const root = tempDirs.make("openclaw-ci-guards-");
   const fakeBin = path.join(root, "bin");
   const callsPath = path.join(root, "pnpm-calls.txt");
+  const task = options.task ?? "guards";
+  const eventName = options.eventName ?? "pull_request";
   mkdirSync(fakeBin);
   if (options.task === "test-types") {
     mkdirSync(path.join(root, "scripts"));
@@ -1608,31 +1613,97 @@ function runCheckShardFixture(options: {
       scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
     })}\n`,
   );
+  let baseSha = "";
+  if (options.checkoutBase) {
+    runGit(root, ["init", "-q", "-b", "main"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    runGit(root, ["config", "user.email", "ci-fixture@example.com"]);
+    runGit(root, ["config", "user.name", "CI Fixture"]);
+    runGit(root, ["add", "package.json"]);
+    runGit(root, ["commit", "-q", "-m", "comparison base"]);
+    baseSha = runGit(root, ["rev-parse", "HEAD"]);
+    writeFileSync(path.join(root, "fixture.txt"), "tested head\n");
+    runGit(root, ["add", "fixture.txt"]);
+    runGit(root, ["commit", "-q", "-m", "tested head"]);
+    // Checkout has supplied both trees; comparison jobs cannot retrieve them again.
+    const origin = path.join(root, "origin.git");
+    runGit(root, ["init", "-q", "--bare", origin]);
+    runGit(root, ["remote", "add", "origin", origin]);
+    writeFileSync(
+      path.join(root, "ci-git-owner.py"),
+      readFileSync(".github/actions/git-owner/owner.py"),
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(root, "scripts/report-test-temp-creations.mjs"),
+      [
+        'import { execFileSync } from "node:child_process";',
+        'import { appendFileSync } from "node:fs";',
+        "const args = process.argv.slice(2);",
+        'execFileSync("git", ["cat-file", "-e", `${args[1]}^{commit}`]);',
+        'appendFileSync(process.env.PNPM_CALLS, `report-test-temp-creations ${args.join(" ")}\\n`);',
+      ].join("\n"),
+    );
+  }
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'if [ "$*" = "run --silent" ]; then exit 1; fi',
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    'case "$1" in',
+    '  deps:npm-lock:check:changed) git cat-file -e "${3}^{commit}" ;;',
+    '  protocol:check) git cat-file -e "${PROTOCOL_SINCE_BASE_SHA}^{commit}" ;;',
+    "esac",
   ]);
-  const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
-    (step: WorkflowStep) => step.name === "Run check shard",
-  ).run;
-  const run = spawnSync("bash", ["-c", checkShardRun], {
+  const job =
+    readCiWorkflow().jobs[task === "bundled-protocol" ? "checks-fast-core" : "check-shard"];
+  const runStep = job.steps.find(
+    (step: WorkflowStep) =>
+      step.name ===
+      (task === "bundled-protocol"
+        ? "Run ${{ matrix.task }} (${{ matrix.runtime }})"
+        : "Run check shard"),
+  );
+  const baseEnvironment = Object.fromEntries(
+    ["CHECKOUT_BASE_SHA", "PR_BASE_SHA", "DIFF_BASE_SHA", "PROTOCOL_SINCE_BASE_SHA"].map((name) => [
+      name,
+      evaluateWorkflowExpression(runStep.env?.[name] ?? job.env?.[name] ?? "${{ '' }}", {
+        eventName,
+        matrix: { task },
+        preflightOutputs: { diff_base_revision: baseSha },
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      }),
+    ]),
+  );
+  const run = spawnSync("bash", ["-c", runStep.run], {
     cwd: root,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...baseEnvironment,
+      CHECKOUT_TOKEN: undefined,
       FROZEN_TARGET: options.frozenTarget ? "true" : "false",
       FORMAT_CHECK: "false",
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      GITHUB_EVENT_NAME: eventName,
+      GIT_CONFIG_COUNT: "0",
+      GIT_CONFIG_GLOBAL: devNull,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_PARAMETERS: "",
+      GIT_TERMINAL_PROMPT: "0",
       HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+      HOME: root,
       HOSTED_RUNNER_STRIPES: "true",
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PNPM_CALLS: callsPath,
-      PR_BASE_SHA: "",
-      TASK: options.task ?? "guards",
+      RUNNER_TEMP: root,
+      TASK: task,
     },
   });
   return {
+    baseSha,
     calls: existsSync(callsPath)
       ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
       : [],
@@ -9099,24 +9170,125 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
     expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
     expect(securityDiffBase).toContain(AMBIGUOUS_MAIN_PUSH_GUARD);
-    const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
-    );
-    expect(parsedWorkflow.jobs["check-shard"].env.CHECKOUT_BASE_SHA).toBe(
-      "${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
-    expect(checkShardStep.env.PR_BASE_SHA).toBe(
-      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
-    expect(checkShardStep.run).not.toContain("--checkout-git");
-    expect(checkShardStep.run).toContain(
-      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"',
-    );
   });
+
+  it.each([
+    ["checks-fast-core", "bundled-protocol", "pull_request", true],
+    ["checks-fast-core", "bundled-protocol", "push", true],
+    ["checks-fast-core", "bundled-protocol", "workflow_dispatch", true],
+    ["checks-fast-core", "baseline-ratchets", "pull_request", true],
+    ["checks-fast-core", "baseline-ratchets", "workflow_dispatch", true],
+    ["checks-fast-core", "release-lint-core", "pull_request", true],
+    ["checks-fast-core", "release-lint-core", "workflow_dispatch", true],
+    ["checks-fast-core", "coercion-helpers", "pull_request", false],
+    ["checks-fast-core", "bun-launcher", "push", false],
+    ["check-shard", "guards", "pull_request", true],
+    ["check-shard", "guards", "push", false],
+    ["check-shard", "guards", "workflow_dispatch", false],
+    ["check-shard", "npm-lock", "pull_request", true],
+    ["check-shard", "npm-lock", "push", true],
+    ["check-shard", "npm-lock", "workflow_dispatch", false],
+    ["check-shard", "prod-types", "pull_request", false],
+  ] as const)("prepares the comparison base for %s/%s on %s", (job, task, eventName, needsBase) => {
+    const expression = readCiWorkflow().jobs[job].env?.CHECKOUT_BASE_SHA ?? "${{ '' }}";
+    for (const baseSha of ["a".repeat(40), ""]) {
+      expect(
+        evaluateWorkflowExpression(expression, {
+          eventName,
+          matrix: { task },
+          preflightOutputs: { diff_base_revision: baseSha },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(needsBase ? baseSha : "");
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "checks bundled protocol using the locally prepared base after checkout access ends",
+    () => {
+      const result = runCheckTaskFixture({
+        checkoutBase: true,
+        frozenTarget: false,
+        scripts: [],
+        task: "bundled-protocol",
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.calls).toEqual(["test:bundled", "protocol:check"]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["pull_request", true],
+    ["push", false],
+    ["workflow_dispatch", false],
+  ] as const)(
+    "runs the temp-creation comparison for %s without remote access",
+    (eventName, report) => {
+      const result = runCheckTaskFixture({
+        checkoutBase: true,
+        eventName,
+        frozenTarget: false,
+        scripts: [
+          "check:doctor-deprecation-registry",
+          "check:temp-path-guardrails",
+          "check:coercion-helpers",
+        ],
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.calls.filter((call) => call.startsWith("report-test-temp-creations"))).toEqual(
+        report
+          ? [`report-test-temp-creations --base ${result.baseSha} --head HEAD --no-merge-base`]
+          : [],
+      );
+      expect(result.calls).toContain("check:import-cycles");
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["PR", "pull_request", true, true, true, false, "changed"],
+    ["push", "push", true, true, true, false, "changed"],
+    ["manual validation", "workflow_dispatch", true, true, true, false, "full"],
+    ["unavailable base", "pull_request", false, true, true, false, "full"],
+    ["older package scripts", "pull_request", true, false, true, true, "full"],
+    ["missing current script", "pull_request", true, false, false, false, "missing"],
+    ["historical target", "pull_request", true, false, false, true, "historical"],
+  ] as const)(
+    "preserves npm-lock scope for %s after checkout access ends",
+    (_name, eventName, checkoutBase, changedScript, fullScript, frozenTarget, outcome) => {
+      const result = runCheckTaskFixture({
+        checkoutBase,
+        eventName,
+        frozenTarget,
+        scripts: [
+          ...(changedScript ? ["deps:npm-lock:check:changed"] : []),
+          ...(fullScript ? ["deps:npm-lock:check"] : []),
+        ],
+        task: "npm-lock",
+      });
+      expect(result.status, result.output).toBe(outcome === "missing" ? 1 : 0);
+      expect(result.calls).toEqual(
+        outcome === "changed"
+          ? [`deps:npm-lock:check:changed --base ${result.baseSha} --head HEAD`]
+          : outcome === "full"
+            ? ["deps:npm-lock:check"]
+            : [],
+      );
+      if (outcome === "missing") {
+        expect(result.output).toContain(
+          "Current CI targets must provide the deps:npm-lock:check package script.",
+        );
+      } else if (outcome === "historical") {
+        expect(result.output).toContain(
+          "[skip] historical target predates the transient npm lock contract",
+        );
+      }
+    },
+  );
 
   it("runs temp path guardrails in the hosted guard shard", () => {
     const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
-    const current = runCheckShardFixture({
+    const current = runCheckTaskFixture({
       frozenTarget: false,
       scripts: [...requiredScripts, "check:temp-path-guardrails"],
     });
@@ -9126,7 +9298,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       current.calls.indexOf("dup:check"),
     );
 
-    const frozenMissing = runCheckShardFixture({
+    const frozenMissing = runCheckTaskFixture({
       frozenTarget: true,
       scripts: requiredScripts,
     });
@@ -9137,7 +9309,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "[skip] frozen target predates the temp path guardrails",
     );
 
-    const currentMissing = runCheckShardFixture({
+    const currentMissing = runCheckTaskFixture({
       frozenTarget: false,
       scripts: requiredScripts,
     });
@@ -9192,7 +9364,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   ])(
     "runs declared typechecks for scripts=$scripts frozen=$frozenTarget",
     ({ scripts, frozenTarget, status, calls }) => {
-      const result = runCheckShardFixture({ scripts, frozenTarget, task: "test-types" });
+      const result = runCheckTaskFixture({ scripts, frozenTarget, task: "test-types" });
       expect(result.status, result.output).toBe(status);
       expect(result.calls).toEqual(calls);
     },
@@ -9738,9 +9910,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       contents: "read",
       "pull-requests": "read",
     });
-    expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ (matrix.task == 'baseline-ratchets' || matrix.task == 'bundled-protocol' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
     expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
       "(matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
@@ -9793,10 +9962,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
     expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
-    expect(checksFastRun.run).not.toContain("protocol-since-base");
-    expect(checksFastRun.run).toContain(
-      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
-    );
     expect(checksFastRun.run).toContain(
       'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',
     );
