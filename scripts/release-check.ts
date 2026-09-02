@@ -23,7 +23,10 @@ import { extract } from "tar";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
-import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mts";
+import {
+  checkCliBootstrapExternalImports,
+  DEFAULT_WORKER_DEPLOY_ENTRYPOINTS,
+} from "./check-cli-bootstrap-imports.mts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -88,6 +91,71 @@ const targetPluginSdkEntries = JSON.parse(
 const targetPrivatePluginSdkEntries = JSON.parse(
   readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
 ) as string[];
+// Frozen targets can predate current generated artifacts. Target-owned package
+// declarations and source entrypoints decide which modern checks apply.
+const targetPackagedSupportPaths = [
+  "scripts/lib/recommended-tool-installs.json",
+  "scripts/lib/guard-inventory-utils.mjs",
+] as const;
+const targetGeneratedPathCapabilities = [
+  ["src/agents/compaction-planning.worker.ts", "dist/agents/compaction-planning.worker.js"],
+  ["src/agents/model-provider-auth.worker.ts", "dist/agents/model-provider-auth.worker.js"],
+  ["src/agents/prepared-model-catalog.worker.ts", "dist/agents/prepared-model-catalog.worker.js"],
+  [
+    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+    "dist/extensions/memory-core/memory-search-knn.child.js",
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+    "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
+  ],
+  [
+    "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "dist/config/sessions/session-transcript-reconcile.worker.js",
+  ],
+  ["src/state/openclaw-database-verify.worker.ts", "dist/state/openclaw-database-verify.worker.js"],
+  [
+    "src/system-agent/setup-inference-detection.worker.ts",
+    "dist/system-agent/setup-inference-detection.worker.js",
+  ],
+  ["src/tasks/task-registry-control.runtime.ts", "dist/task-registry-control.runtime.js"],
+  [
+    "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
+    "dist/telegram-ingress-worker.runtime.js",
+  ],
+] as const;
+const targetWorkerEntrypointSources = [
+  "src/worker/worker-deploy-entry.ts",
+  "src/worker/workspace-rsync-receiver.ts",
+] as const;
+
+function resolveTargetPackageContentCapabilities(rootDir = resolve(".")) {
+  const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as unknown;
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    Array.isArray(packageJson) ||
+    !("files" in packageJson) ||
+    !Array.isArray(packageJson.files) ||
+    !packageJson.files.every((entry) => typeof entry === "string")
+  ) {
+    throw new Error("release-check: target package.json files must be an array of strings.");
+  }
+  const declaredPackageFiles = new Set(packageJson.files);
+  return {
+    requiredPaths: [
+      ...targetPackagedSupportPaths.filter((path) => declaredPackageFiles.has(path)),
+      ...targetGeneratedPathCapabilities
+        .filter(([sourcePath]) => existsSync(join(rootDir, sourcePath)))
+        .map(([, outputPath]) => outputPath),
+    ],
+    workerEntrypoints: DEFAULT_WORKER_DEPLOY_ENTRYPOINTS.filter((_, index) =>
+      existsSync(join(rootDir, targetWorkerEntrypointSources[index]!)),
+    ),
+  };
+}
+
+const targetPackageContentCapabilities = resolveTargetPackageContentCapabilities();
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
@@ -109,20 +177,9 @@ const requiredPathGroups = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
-  "scripts/lib/recommended-tool-installs.json",
-  "scripts/lib/guard-inventory-utils.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
-  "dist/agents/compaction-planning.worker.js",
-  "dist/agents/model-provider-auth.worker.js",
-  "dist/agents/prepared-model-catalog.worker.js",
-  "dist/extensions/memory-core/memory-search-knn.child.js",
-  "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
-  "dist/config/sessions/session-transcript-reconcile.worker.js",
-  "dist/state/openclaw-database-verify.worker.js",
-  "dist/system-agent/setup-inference-detection.worker.js",
-  "dist/task-registry-control.runtime.js",
-  "dist/telegram-ingress-worker.runtime.js",
+  ...targetPackageContentCapabilities.requiredPaths,
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
@@ -1396,6 +1453,7 @@ async function main() {
 function verifyPackedContents(results: NpmPackResult[], packedRoot: string): void {
   checkCliBootstrapExternalImports({
     rootDir: packedRoot,
+    workerEntrypoints: targetPackageContentCapabilities.workerEntrypoints,
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),
     },

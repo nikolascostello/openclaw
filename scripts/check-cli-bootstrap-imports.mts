@@ -12,7 +12,7 @@ import {
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
-const WORKER_DEPLOY_ENTRYPOINTS = [
+export const DEFAULT_WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
 ] as const;
@@ -38,6 +38,7 @@ type CliBootstrapCheckParams = {
   entrypoints?: string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
+  workerEntrypoints?: readonly string[];
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
@@ -352,9 +353,11 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
-  );
+  const selectedEntrypoints = params.workerEntrypoints ?? DEFAULT_WORKER_DEPLOY_ENTRYPOINTS;
+  if (selectedEntrypoints.length === 0) {
+    return [];
+  }
+  const entrypoints = selectedEntrypoints.map((entrypoint) => path.resolve(rootDir, entrypoint));
   const artifactDir = path.dirname(entrypoints[0]!);
   const artifactNames = new Set(
     entrypoints.flatMap((entrypoint) => {
