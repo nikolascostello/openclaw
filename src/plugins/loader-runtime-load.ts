@@ -220,7 +220,7 @@ function loadOpenClawPluginsInternal(
         context.normalized.entries[normalizePluginPolicyId(manifest.id)],
         hasKind(manifest.kind, "memory") ? memorySlot : undefined,
         manifest.id === dreamingSidecar?.engineId ? dreamingSidecar : undefined,
-        context.preferBuiltPluginArtifacts,
+        context.artifactPreference,
         options.runtimeSideEffects ?? context.shouldActivate,
         context.channelPluginLoadIntent,
         validateOnly,
@@ -264,6 +264,7 @@ function loadOpenClawPluginsInternal(
       const activation = resolveEffectivePluginActivationState({
         id: record.id,
         origin: record.origin,
+        channelIds: record.channels,
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

@@ -183,6 +183,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
+let cachedRefinementPrefixes: string[] = [];
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
 
@@ -194,6 +195,7 @@ function listReloadRules(): ReloadRule[] {
   // version changes; cache them to keep every config diff cheap.
   if (registry !== cachedRegistry || gatewayRegistryVersion !== cachedGatewayRegistryVersion) {
     cachedReloadRules = null;
+    cachedRefinementPrefixes = [];
     cachedRegistry = registry;
     cachedGatewayRegistryVersion = gatewayRegistryVersion;
   }
@@ -278,8 +280,16 @@ function listReloadRules(): ReloadRule[] {
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
   rules.sort((a, b) => b.prefix.length - a.prefix.length);
+  cachedRefinementPrefixes = [...pluginReloadRules, ...channelReloadRules].map(
+    (rule) => rule.prefix,
+  );
   cachedReloadRules = rules;
   return rules;
+}
+
+export function listConfigReloadRefinementPrefixes(): string[] {
+  listReloadRules();
+  return cachedRefinementPrefixes;
 }
 
 function matchRule(path: string): ReloadRule | null {

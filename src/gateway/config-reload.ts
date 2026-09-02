@@ -45,6 +45,7 @@ import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
@@ -558,7 +559,11 @@ export function startGatewayConfigReloader(opts: {
         appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
-    const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
+    const configChangedPaths = diffGatewayReloadPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
       nextCompareConfig,

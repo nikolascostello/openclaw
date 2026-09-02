@@ -1,9 +1,6 @@
 // Generic cache storage stays independent of plugin lifecycle owners.
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 
-/** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
-type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
-
 /** Small process-local LRU cache for runtime registries and compiled validators. */
 export class PluginLruCache<T> {
   readonly #maxEntries: number;
@@ -32,20 +29,14 @@ export class PluginLruCache<T> {
 
   /** Returns a cached value and refreshes its recency when present. */
   get(cacheKey: string): T | undefined {
-    const cached = this.getResult(cacheKey);
-    return cached.hit ? cached.value : undefined;
-  }
-
-  /** Returns a hit/miss result and promotes hits to the newest LRU position. */
-  getResult(cacheKey: string): PluginLruCacheResult<T> {
     if (!this.#entries.has(cacheKey)) {
-      return { hit: false };
+      return undefined;
     }
     // SAFETY: has() proved the key exists; undefined remains a valid cached T.
     const cached = this.#entries.get(cacheKey) as T;
     this.#entries.delete(cacheKey);
     this.#entries.set(cacheKey, cached);
-    return { hit: true, value: cached };
+    return cached;
   }
 
   /** Stores a value as the newest entry and evicts oldest entries past capacity. */

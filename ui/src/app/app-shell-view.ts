@@ -306,6 +306,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
       restartPending: gatewaySnapshot.restartPending === true,
+      suspensionPhase: gatewaySnapshot.suspensionPhase,
       queuedOutboxCount: storedOutboxes?.total ?? 0,
       lastError: gatewaySnapshot.lastError,
       outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
@@ -349,6 +350,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         activeHash: host.routeState.location?.hash ?? "",
         offline: gatewaySnapshot.offlineStable,
         restartPending: gatewaySnapshot.restartPending,
+        suspensionPhase: gatewaySnapshot.suspensionPhase,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
         gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
@@ -411,6 +413,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       : renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
+          .desktopAvailable=${desktopPanelAvailable}
+          .custodianAvailable=${custodianPanelAvailable}
           .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
             host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}

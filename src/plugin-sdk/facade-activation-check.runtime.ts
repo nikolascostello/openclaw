@@ -305,6 +305,7 @@ export function evaluateBundledPluginPublicSurfaceAccess(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: params.manifestRecord.id,
     origin: params.manifestRecord.origin,
+    channelIds: params.manifestRecord.channels,
     config: params.normalizedPluginsConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.manifestRecord),

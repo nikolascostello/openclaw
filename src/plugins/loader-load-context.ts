@@ -25,6 +25,10 @@ import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
+import {
+  resolvePluginRuntimeArtifactPreference,
+  type PluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
@@ -58,17 +62,19 @@ function buildActivationMetadataHash(params: {
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
-  const enabledSourceChannels = Object.entries(
+  // Both sides of channels.<id>.enabled steer activation, so an added or flipped
+  // flag must miss the cache instead of reusing a registry built without it.
+  const sourceChannelEnablement = Object.entries(
     (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
   )
-    .filter(([, value]) => {
+    .flatMap(([channelId, value]) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return false;
+        return [];
       }
-      return (value as { enabled?: unknown }).enabled === true;
+      const enabled = (value as { enabled?: unknown }).enabled;
+      return typeof enabled === "boolean" ? [[channelId, enabled] as const] : [];
     })
-    .map(([channelId]) => channelId)
-    .toSorted((left, right) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   // Source config selects validation and defaults even when resolved values match.
   // Object fields keep an absent config distinct from an explicit null source.
   const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
@@ -86,7 +92,7 @@ function buildActivationMetadataHash(params: {
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryInputs,
-        enabledChannels: enabledSourceChannels,
+        channelEnablement: sourceChannelEnablement,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -105,7 +111,7 @@ function buildCacheKey(params: {
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
-  preferBuiltPluginArtifacts?: boolean;
+  artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
@@ -152,7 +158,7 @@ function buildCacheKey(params: {
     requireSetupEntryForSetupOnlyChannelPlugins:
       params.requireSetupEntryForSetupOnlyChannelPlugins === true,
     channelPluginLoadIntent: params.channelPluginLoadIntent,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
+    artifactPreference: params.artifactPreference,
     resolveRawConfigEnvVars: params.resolveRawConfigEnvVars === true,
     loadModules: params.loadModules !== false,
     toolDiscovery: params.toolDiscovery === true,
@@ -251,7 +257,9 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
-  const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
+  const artifactPreference = resolvePluginRuntimeArtifactPreference(
+    options.preferBuiltPluginArtifacts,
+  );
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   // Config identity cannot prove a custom profile's environment. Only borrow
@@ -304,7 +312,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
-    preferBuiltPluginArtifacts,
+    artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
@@ -329,7 +337,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
-    preferBuiltPluginArtifacts,
+    artifactPreference,
     shouldActivate: options.mode !== "cli-metadata" && options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,

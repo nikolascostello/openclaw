@@ -11,6 +11,10 @@ import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import {
+  prefersBuiltPluginArtifacts,
+  resolvePluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
@@ -72,7 +76,11 @@ function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDi
         rootDir: manifest.rootDir,
         origin: manifest.origin,
         packageManifest: manifest.packageManifest,
-        preferBuiltPluginArtifacts: loadContext?.preferBuiltPluginArtifacts === true,
+        preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+          resolvePluginRuntimeArtifactPreference(loadContext?.preferBuiltPluginArtifacts),
+          manifest.origin,
+        ),
+        sourcePreferred: manifest.sourcePreferred,
         registry,
       })
     : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };

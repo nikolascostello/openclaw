@@ -49,6 +49,7 @@ import {
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -56,6 +57,7 @@ import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { prefersBuiltPluginArtifacts } from "./plugin-runtime-artifact-selection.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -122,6 +124,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
       });
@@ -148,6 +151,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
       });
   const entry = context.normalized.entries[policyId];
@@ -208,6 +212,11 @@ export function loadRuntimePluginCandidate(params: {
       record,
       message,
     });
+  const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    pluginId,
+    packageName: candidate.packageName,
+    packageBuild: candidate.packageManifest?.build,
+  });
   if (blockUntrustedLocalScopedChannelSetupImport) {
     record.status = "disabled";
     record.error =
@@ -220,6 +229,10 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const preferBuiltPluginArtifacts = prefersBuiltPluginArtifacts(
+    context.artifactPreference,
+    candidate.origin,
+  );
   const runtimeCandidateEntry = cliMetadata
     ? { source: candidate.source, rootDir: pluginRoot }
     : resolvePluginRuntimeArtifact({
@@ -228,7 +241,8 @@ export function loadRuntimePluginCandidate(params: {
         source: candidate.source,
         rootDir: pluginRoot,
         origin: candidate.origin,
-        preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
         packageManifest: candidate.packageManifest,
         registry,
       });
@@ -240,7 +254,8 @@ export function loadRuntimePluginCandidate(params: {
           source: manifestRecord.setupSource,
           rootDir: pluginRoot,
           origin: candidate.origin,
-          preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+          preferBuiltPluginArtifacts,
+          sourcePreferred: manifestRecord.sourcePreferred,
           packageManifest: candidate.packageManifest,
           registry,
         })
@@ -582,6 +597,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during ${failurePhase} from ${record.source}: `,
       diagnosticMessagePrefix: `plugin failed during ${failurePhase}: `,
+      missingDependencyHint,
       ...(error instanceof PluginDashboardDeclarationError
         ? { diagnosticCode: "dashboard-declaration-invalid" }
         : {}),

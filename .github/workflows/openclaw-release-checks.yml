@@ -1255,6 +1255,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
@@ -1819,7 +1820,7 @@ jobs:
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
