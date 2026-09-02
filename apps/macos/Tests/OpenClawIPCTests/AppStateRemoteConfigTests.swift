@@ -96,7 +96,7 @@ struct AppStateRemoteConfigTests {
             let gate = GatewayConfigReadGate()
 
             let read = Task {
-                await GatewayEndpointStore._testLiveSourceSnapshot(
+                try await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
                     beforeConfigRead: { await gate.suspendRead() })
             }
@@ -104,13 +104,9 @@ struct AppStateRemoteConfigTests {
             state.remoteUrl = "wss://gateway-b.example.test"
             await gate.release()
 
-            let source = await read.value
-            #expect(source.mode == .unconfigured)
-            #expect(source.token == nil)
-            #expect(source.password == nil)
-            #expect(source.deviceAuthGatewayID == nil)
-            #expect(source.directRemoteURL == nil)
-            #expect(source.sshRouteIdentity == nil)
+            await #expect(throws: CancellationError.self) {
+                try await read.value
+            }
         }
     }
 
@@ -413,8 +409,8 @@ struct AppStateRemoteConfigTests {
             #expect(state.gatewayConfigConflict?.fieldNames == ["Identity file", "Gateway token"])
             #expect(state.gatewayConfigConflict?.message ==
                 "These settings changed outside the app while you were editing: " +
-                    "Identity file and Gateway token. " +
-                    "Choose which version to keep.")
+                "Identity file and Gateway token. " +
+                "Choose which version to keep.")
             #expect(!state._testGatewayConfigIsCurrentForRouting)
 
             state._testEnableGatewayConfigSync()
@@ -750,7 +746,9 @@ struct AppStateRemoteConfigTests {
                 #expect(settings.identity.isEmpty)
             }
     }
+}
 
+extension AppStateRemoteConfigTests {
     @Test
     func `updated remote gateway config sets trimmed token`() {
         let remote = AppState._testUpdatedRemoteGatewayConfig(
