@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  captureControlUiE2eFailureDiagnostics,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
@@ -74,6 +75,12 @@ suite.define(() => {
       await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
       await page.reload();
       await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "dashboard side-panel selection after reload",
+      });
+      throw error;
     } finally {
       await context.close();
     }
