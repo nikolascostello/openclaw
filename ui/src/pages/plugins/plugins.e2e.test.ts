@@ -480,6 +480,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.locator('[data-plugin-id="workboard"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/workboard");
       expect(new URL(page.url()).search).toBe("?from=plugins");
+      await page.getByRole("link", { name: "Plugins", exact: true }).waitFor();
       await page.goto(`${server.baseUrl}plugins`);
       const openAttentionSettings = page.getByRole("button", {
         name: "Open settings for Attention A",
