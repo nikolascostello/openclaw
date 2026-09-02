@@ -326,25 +326,15 @@ export function createApplicationGateway(
       const suspensionPhase = readSuspensionPhase(event.payload);
       if (suspensionPhase) {
         setSnapshot({ ...snapshot, suspensionPhase });
-        if (!isCurrentClient(eventClient)) {
-          return;
-        }
       }
     } else if (event.event === "shutdown") {
       // Only a restart-bearing shutdown arms the amber state; an ordinary stop
       // (restartExpectedMs absent) flows through the normal offline pill so the
       // retry action stays reachable. Hostile values fall to the timer clamp.
-      const payload = event.payload;
-      const expected =
-        payload && typeof payload === "object" && "restartExpectedMs" in payload
-          ? payload.restartExpectedMs
-          : undefined;
+      const expected = asOptionalRecord(event.payload)?.restartExpectedMs;
       if (typeof expected === "number") {
         scheduleRestartDeadline(expected);
         setSnapshot({ ...snapshot, restartPending: true });
-        if (!isCurrentClient(eventClient)) {
-          return;
-        }
       }
     } else if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);
@@ -354,12 +344,12 @@ export function createApplicationGateway(
         // gateways can omit still-connected clients after presence TTL pruning.
         if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
           setSnapshot({ ...snapshot, selfUser });
-          // A presence observer can replace its client before this event reaches the log.
-          if (!isCurrentClient(eventClient)) {
-            return;
-          }
         }
       }
+    }
+    // Snapshot observers can replace the client before this event reaches the log.
+    if (!isCurrentClient(eventClient)) {
+      return;
     }
     eventLog = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...eventLog].slice(
       0,
@@ -534,9 +524,7 @@ export function createApplicationGateway(
           });
         }
         everConnected = true;
-        const canvasPluginSurfaceUrl = normalizeCanvasPluginSurfaceUrl(
-          hello.pluginSurfaceUrls?.canvas,
-        );
+        const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
         const canvasLeaseGeneration = beginCanvasSurfaceLease(nextClient);
         clearRestartDeadlineTimer();
         setSnapshot({
@@ -678,7 +666,7 @@ export function createApplicationGateway(
     }
   };
 
-  const gateway: ApplicationGateway = {
+  return {
     get snapshot() {
       return snapshot;
     },
@@ -747,7 +735,6 @@ export function createApplicationGateway(
       setSnapshot({ ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } });
     },
   };
-  return gateway;
 }
 
 function isSameOriginGateway(gatewayUrl: string): boolean {
@@ -756,9 +743,4 @@ function isSameOriginGateway(gatewayUrl: string): boolean {
   } catch {
     return false;
   }
-}
-
-function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
 }
