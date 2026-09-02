@@ -8,6 +8,7 @@ import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
+  writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import { clearActivePluginRegistry, disposePluginRegistryInstances } from "./runtime.js";
 
@@ -75,29 +76,38 @@ it("imports only replaced plugins and reuses unchanged capability registrations"
   await disposePluginRegistryInstances(next, previous);
 });
 
-it("rechecks effective policy before retaining a previously enabled plugin", async () => {
-  useNoBundledPlugins();
-  const plugin = writePlugin({
-    id: "policy-probe",
-    body: 'module.exports = { id: "policy-probe", register() {} };',
-  });
-  const config = {
-    plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-  };
-  const previous = loadOpenClawPlugins({ config, cache: false });
-  const denied = loadOpenClawPlugins({
-    config: { plugins: { ...config.plugins, deny: [plugin.id] } },
-    activate: false,
-    runtimeSideEffects: true,
-    previousRegistry: previous,
-  });
-  expect(denied.plugins.find((record) => record.id === plugin.id)).toMatchObject({
-    enabled: false,
-    status: "disabled",
-  });
-  expect(denied.plugins[0]).not.toBe(previous.plugins[0]);
-  await disposePluginRegistryInstances(denied, previous);
-});
+it.each(["denylist", "owned-channel"])(
+  "rechecks %s policy before retaining a previously enabled plugin",
+  async (policy) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "policy-probe",
+      body: 'module.exports = { id: "policy-probe", register() {} };',
+    });
+    const channelId = "transport-probe";
+    writePluginMetadata({ dir: plugin.dir, id: plugin.id, channels: [channelId] });
+    const config = {
+      plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+      channels: { [channelId]: { enabled: true } },
+    };
+    const previous = loadOpenClawPlugins({ config, cache: false });
+    const previousRecord = previous.plugins.find((record) => record.id === plugin.id);
+    expect(previousRecord).toMatchObject({ enabled: true, status: "loaded" });
+    const denied = loadOpenClawPlugins({
+      config:
+        policy === "denylist"
+          ? { ...config, plugins: { ...config.plugins, deny: [plugin.id] } }
+          : { ...config, channels: { [channelId]: { enabled: false } } },
+      activate: false,
+      runtimeSideEffects: true,
+      previousRegistry: previous,
+    });
+    const deniedRecord = denied.plugins.find((record) => record.id === plugin.id);
+    expect(deniedRecord).toMatchObject({ enabled: false, status: "disabled" });
+    expect(deniedRecord).not.toBe(previousRecord);
+    await disposePluginRegistryInstances(denied, previous);
+  },
+);
 
 it("exposes failed candidates for awaited instance disposal", async () => {
   useNoBundledPlugins();

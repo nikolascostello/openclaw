@@ -386,25 +386,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   assertReservedSessionKeyOwned(params.key, "create");
                   return await session.createSessionEntry(params);
                 }
-                if ("acpSessionBinding" in params.initialEntry) {
-                  if (!params.key.startsWith(`plugin:${pluginId}:`)) {
+                const initialEntry = params.initialEntry;
+                if (!("acpSessionBinding" in initialEntry)) {
+                  const backend = currentRegistry().cliBackends.find(
+                    (entry) => entry.backend.id === initialEntry.cliBackendId,
+                  );
+                  if (!backend || backend.pluginId !== pluginId) {
                     throw new Error(
-                      `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
+                      `Plugin "${pluginId}" must own CLI backend "${initialEntry.cliBackendId}" to create its sessions.`,
                     );
                   }
-                  return await session.createSessionEntry({
-                    ...params,
-                    initialEntry: { ...params.initialEntry, pluginOwnerId: pluginId },
-                  });
-                }
-                const cliInitial = params.initialEntry;
-                const backend = currentRegistry().cliBackends.find(
-                  (entry) => entry.backend.id === cliInitial.cliBackendId,
-                );
-                if (!backend || backend.pluginId !== pluginId) {
-                  throw new Error(
-                    `Plugin "${pluginId}" must own CLI backend "${cliInitial.cliBackendId}" to create its sessions.`,
-                  );
                 }
                 // Plugin-owned sessions stay inside a namespace that no other plugin can claim.
                 if (!params.key.startsWith(`plugin:${pluginId}:`)) {
@@ -414,7 +405,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 }
                 return await session.createSessionEntry({
                   ...params,
-                  initialEntry: { ...cliInitial, pluginOwnerId: pluginId },
+                  initialEntry: { ...initialEntry, pluginOwnerId: pluginId },
                 });
               });
             },

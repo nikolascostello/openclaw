@@ -124,8 +124,8 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .action(async (id: string, opts: { acceptCapabilities?: boolean }) => {
-      const { runPluginsEnableCommand } = await import("./plugins-cli.runtime.js");
-      await runPluginsEnableCommand(id, opts);
+      const { runPluginsSetEnabledCommand } = await import("./plugins-cli.runtime.js");
+      await runPluginsSetEnabledCommand(id, true, opts);
     });
 
   plugins
@@ -133,8 +133,8 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const { runPluginsDisableCommand } = await import("./plugins-cli.runtime.js");
-      await runPluginsDisableCommand(id);
+      const { runPluginsSetEnabledCommand } = await import("./plugins-cli.runtime.js");
+      await runPluginsSetEnabledCommand(id, false);
     });
 
   plugins

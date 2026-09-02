@@ -206,6 +206,7 @@ function loadOpenClawPluginsInternal(
       const activation = resolveEffectivePluginActivationState({
         id: manifest.id,
         origin: candidate.origin,
+        channelIds: manifest.channels,
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifest),

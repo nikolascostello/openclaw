@@ -189,12 +189,11 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(await requests.snapshot().map(\.method) == ["talk.session.close"])
     }
 
-    @Test func `stale player completion cannot finish replacement turn playback`() async throws {
+    @Test func `stale player completion cannot retire replacement turn playback`() async throws {
         let player = IndexedPCMStreamingAudioPlayer()
-        let replacementFinished = AsyncStream.makeStream(
-            of: Void.self,
-            bufferingPolicy: .bufferingNewest(1))
-        var replacementIsCompleting = false
+        let audioA = Data(repeating: 0x0A, count: 960)
+        let audioB = Data(repeating: 0x0B, count: 960)
+        let nextAudioB = Data(repeating: 0x0C, count: 960)
         var speakingStates: [Bool] = []
         let session = RealtimeTalkRelaySession(
             transport: unusedRealtimeRelayTransport(),
@@ -202,40 +201,43 @@ struct RealtimeTalkRelaySessionPlaybackTests {
             audioCapture: TestRealtimeTalkAudioCapture(),
             pcmPlayer: player,
             onStatus: { _ in },
-            onSpeakingChanged: {
-                speakingStates.append($0)
-                if replacementIsCompleting, !$0 { replacementFinished.continuation.yield() }
-            })
+            onSpeakingChanged: { speakingStates.append($0) })
         defer {
-            replacementFinished.continuation.finish()
             session.stop()
             player.shutdown()
         }
         session._test_setRelaySessionId("relay-1")
 
-        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-a"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-a", data: audioA))
         try await player.waitForPlayback(0)
-        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-b"))
+        try await player.waitForFrames(1, playbackIndex: 0)
+        // Fresh A audio followed immediately by B creates an actual replacement even if
+        // idle completion ran while the test awaited the first playback.
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-a", data: audioA))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-b", data: audioB))
         try await player.waitForPlayback(1)
+        try await player.waitForFrames(1, playbackIndex: 1)
 
-        #expect(player.activePlaybackIndexes.contains(1))
-        #expect(speakingStates == [true, false, true])
+        #expect(player.activePlaybackIndexes == [0, 1])
 
         player.complete(0)
         try await player.waitUntilCompletionWasHandled(0)
 
-        #expect(player.activePlaybackIndexes.contains(1))
-        #expect(session._test_isOutputPlaying())
-        #expect(speakingStates == [true, false, true])
+        #expect(player.activePlaybackIndexes == [1])
+        // Idle completion may change the speaking indicator; it must not retire the
+        // replacement's stream or route its next frame through another player call.
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-b", data: nextAudioB))
+        try await player.waitForFrames(2, playbackIndex: 1)
+        #expect(player.playbackFrames[1] == [audioB, nextAudioB])
+        #expect(player.playCount == 2)
 
-        replacementIsCompleting = true
+        await session._test_handleGatewayEvent(outputAudioDoneEvent(turnId: "turn-b"))
         player.complete(1)
-        _ = try await waitForRealtimeRelayEvent(
-            replacementFinished.stream,
-            operation: "replacement playback to finish")
+        try await player.waitUntilCompletionWasHandled(1)
 
+        #expect(player.activePlaybackIndexes.isEmpty)
         #expect(!session._test_isOutputPlaying())
-        #expect(speakingStates == [true, false, true, false])
+        #expect(speakingStates.last == false)
     }
 
     @Test func `cancelled playback task cannot start after its replacement`() async throws {

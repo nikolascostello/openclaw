@@ -238,9 +238,7 @@ function createPluginModuleLoader(params: {
 }): PluginModuleLoader {
   // A declined native require can leave an ESM dependency in flight. The
   // fallback must transform both the entry and OpenClaw SDK dependencies.
-  const getLoadWithSourceTransform = createLazySourceTransformLoader({
-    ...params,
-  });
+  const getLoadWithSourceTransform = createLazySourceTransformLoader(params);
   const loadCachedTarget = (target: string, load: () => unknown): unknown => {
     const source = getPluginCacheSource(target, params.cache);
     const cached = source.variants.get(params.cacheKey)?.exports;
@@ -253,38 +251,25 @@ function createPluginModuleLoader(params: {
     source.variants.set(params.cacheKey, { exports: { value: loaded } });
     return loaded;
   };
-  // When the caller has explicitly opted out of native loading, route every
-  // target through jiti so caller-provided alias rewrites still apply.
-  if (!params.tryNative) {
-    return (target) =>
-      loadCachedTarget(target, () => {
-        pluginModuleLoaderStats.calls += 1;
-        pluginModuleLoaderStats.sourceTransformForced += 1;
-        recordSourceTransformTarget(target);
-        return getLoadWithSourceTransform()(target);
-      });
-  }
-  // Otherwise prefer native require() for already-compiled JS artifacts
-  // (the bundled plugin public surfaces shipped in dist/). jiti's transform
-  // pipeline provides no value for output that is already plain JS and adds
-  // several seconds of per-load overhead on slower hosts. jiti still runs
-  // for TS / TSX sources and for the small set of require(esm) /
-  // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
-  // handle.
+  // Prefer native compiled JS, but preserve caller-requested transforms for alias rewrites.
   return (target) =>
     loadCachedTarget(target, () => {
       pluginModuleLoaderStats.calls += 1;
-      const native = tryNativeRequireJavaScriptModule(target, {
-        allowWindows: true,
-        aliasMap: params.resolveAlias,
-        fallbackOnMissingDependency: true,
-      });
-      if (native.ok) {
-        pluginModuleLoaderStats.nativeHits += 1;
-        return native.moduleExport;
+      if (params.tryNative) {
+        const native = tryNativeRequireJavaScriptModule(target, {
+          allowWindows: true,
+          aliasMap: params.resolveAlias,
+          fallbackOnMissingDependency: true,
+        });
+        if (native.ok) {
+          pluginModuleLoaderStats.nativeHits += 1;
+          return native.moduleExport;
+        }
+        pluginModuleLoaderStats.nativeMisses += 1;
+        pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+      } else {
+        pluginModuleLoaderStats.sourceTransformForced += 1;
       }
-      pluginModuleLoaderStats.nativeMisses += 1;
-      pluginModuleLoaderStats.sourceTransformFallbacks += 1;
       recordSourceTransformTarget(target);
       return getLoadWithSourceTransform()(target);
     });

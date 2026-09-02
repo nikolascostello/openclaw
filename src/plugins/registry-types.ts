@@ -155,11 +155,6 @@ type PluginChannelSetupRegistration = PluginRegistrationMetadata & {
   enabled: boolean;
 };
 
-type PluginProviderRegistration = PluginOwnedProviderRegistration<ProviderPlugin>;
-type PluginModelCatalogProviderRegistration =
-  PluginOwnedProviderRegistration<UnifiedModelCatalogProviderPlugin>;
-type PluginSessionCatalogRegistration = PluginOwnedProviderRegistration<SessionCatalogProvider>;
-
 export type PluginDashboardDataBindingRegistration = PluginManifestDashboardDataBinding & {
   pluginId: string;
   capabilityId: string;
@@ -191,27 +186,6 @@ export type PluginOwnedProviderRegistration<T> = PluginRegistrationMetadata & {
   provider: T;
 };
 
-type PluginSpeechProviderRegistration = PluginOwnedProviderRegistration<SpeechProviderPlugin>;
-type PluginEmbeddingProviderRegistration =
-  PluginOwnedProviderRegistration<EmbeddingProviderAdapter>;
-type PluginRealtimeTranscriptionProviderRegistration =
-  PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
-type PluginRealtimeVoiceProviderRegistration =
-  PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
-type PluginMediaUnderstandingProviderRegistration =
-  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
-type PluginTranscriptsSourceProviderRegistration =
-  PluginOwnedProviderRegistration<TranscriptSourceProvider>;
-type PluginImageGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
-type PluginVideoGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
-type PluginMusicGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<MusicGenerationProviderPlugin>;
-type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
-type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
-type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
-type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 type PluginCodexAppServerExtensionFactoryRegistration = PluginRegistrationMetadata & {
   rawFactory: CodexAppServerExtensionFactory;
   factory: CodexAppServerExtensionFactory;
@@ -405,24 +379,24 @@ export type PluginRegistry = {
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
-  providers: PluginProviderRegistration[];
-  modelCatalogProviders: PluginModelCatalogProviderRegistration[];
-  sessionCatalogs: PluginSessionCatalogRegistration[];
+  providers: PluginOwnedProviderRegistration<ProviderPlugin>[];
+  modelCatalogProviders: PluginOwnedProviderRegistration<UnifiedModelCatalogProviderPlugin>[];
+  sessionCatalogs: PluginOwnedProviderRegistration<SessionCatalogProvider>[];
   cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
-  embeddingProviders: PluginEmbeddingProviderRegistration[];
-  speechProviders: PluginSpeechProviderRegistration[];
-  realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
-  realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
-  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
-  transcriptSourceProviders: PluginTranscriptsSourceProviderRegistration[];
-  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
-  videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
-  musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
-  webFetchProviders: PluginWebFetchProviderRegistration[];
-  webSearchProviders: PluginWebSearchProviderRegistration[];
-  workerProviders: Map<string, PluginWorkerProviderRegistration>;
-  migrationProviders: PluginMigrationProviderRegistration[];
+  embeddingProviders: PluginOwnedProviderRegistration<EmbeddingProviderAdapter>[];
+  speechProviders: PluginOwnedProviderRegistration<SpeechProviderPlugin>[];
+  realtimeTranscriptionProviders: PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>[];
+  realtimeVoiceProviders: PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>[];
+  mediaUnderstandingProviders: PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>[];
+  transcriptSourceProviders: PluginOwnedProviderRegistration<TranscriptSourceProvider>[];
+  imageGenerationProviders: PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>[];
+  videoGenerationProviders: PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>[];
+  musicGenerationProviders: PluginOwnedProviderRegistration<MusicGenerationProviderPlugin>[];
+  webFetchProviders: PluginOwnedProviderRegistration<WebFetchProviderPlugin>[];
+  webSearchProviders: PluginOwnedProviderRegistration<WebSearchProviderPlugin>[];
+  workerProviders: Map<string, PluginOwnedProviderRegistration<WorkerProvider>>;
+  migrationProviders: PluginOwnedProviderRegistration<MigrationProviderPlugin>[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];

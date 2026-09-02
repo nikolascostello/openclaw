@@ -162,7 +162,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
-async function runPluginsSetEnabledCommand(
+export async function runPluginsSetEnabledCommand(
   pluginId: string,
   enabled: boolean,
   opts: { acceptCapabilities?: boolean } = {},
@@ -194,17 +194,6 @@ async function runPluginsSetEnabledCommand(
   defaultRuntime.log(
     `${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".${gateway ? "" : " Saved for the next Gateway start."}`,
   );
-}
-
-export async function runPluginsEnableCommand(
-  pluginId: string,
-  opts: { acceptCapabilities?: boolean } = {},
-): Promise<void> {
-  await runPluginsSetEnabledCommand(pluginId, true, opts);
-}
-
-export async function runPluginsDisableCommand(pluginId: string): Promise<void> {
-  await runPluginsSetEnabledCommand(pluginId, false);
 }
 
 export async function runPluginsReloadCommand(

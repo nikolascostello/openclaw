@@ -136,9 +136,7 @@ export function loadRuntimePluginCandidate(params: {
       enabled: false,
       activationState,
     });
-    duplicate.status = "disabled";
-    duplicate.error = `overridden by ${existingOrigin} plugin`;
-    markPluginActivationDisabled(duplicate, duplicate.error);
+    markPluginActivationDisabled(duplicate, `overridden by ${existingOrigin} plugin`);
     registry.plugins.push(duplicate);
     return;
   }
@@ -218,12 +216,12 @@ export function loadRuntimePluginCandidate(params: {
     packageBuild: candidate.packageManifest?.build,
   });
   if (blockUntrustedLocalScopedChannelSetupImport) {
-    record.status = "disabled";
-    record.error =
+    markPluginActivationDisabled(
+      record,
       activationState.reason ??
-      enableState.reason ??
-      "local plugin requires explicit trust for setup";
-    markPluginActivationDisabled(record, record.error);
+        enableState.reason ??
+        "local plugin requires explicit trust for setup",
+    );
     // Do not claim seenIds: a different-id trusted fallback may still load later.
     registry.plugins.push(record);
     return;
@@ -287,16 +285,12 @@ export function loadRuntimePluginCandidate(params: {
     cliMetadata,
   });
   if (!registrationPlan) {
-    record.status = "disabled";
-    record.error = enableState.reason;
     markPluginActivationDisabled(record, enableState.reason);
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
     return;
   }
   if (!enableState.enabled) {
-    record.status = "disabled";
-    record.error = enableState.reason;
     markPluginActivationDisabled(record, enableState.reason);
   }
 
@@ -326,8 +320,6 @@ export function loadRuntimePluginCandidate(params: {
     });
     if (!earlyMemoryDecision.enabled) {
       record.enabled = false;
-      record.status = "disabled";
-      record.error = earlyMemoryDecision.reason;
       markPluginActivationDisabled(record, earlyMemoryDecision.reason);
       registry.plugins.push(record);
       state.seenIds.set(pluginId, candidate.origin);
@@ -347,8 +339,6 @@ export function loadRuntimePluginCandidate(params: {
     });
     if (!memoryDecision.enabled && !isDreamingSidecar) {
       record.enabled = false;
-      record.status = "disabled";
-      record.error = memoryDecision.reason;
       markPluginActivationDisabled(record, memoryDecision.reason);
       registry.plugins.push(record);
       state.seenIds.set(pluginId, candidate.origin);
@@ -507,8 +497,6 @@ export function loadRuntimePluginCandidate(params: {
       });
       if (!memoryDecision.enabled) {
         record.enabled = false;
-        record.status = "disabled";
-        record.error = memoryDecision.reason;
         markPluginActivationDisabled(record, memoryDecision.reason);
         registry.plugins.push(record);
         state.seenIds.set(pluginId, candidate.origin);
