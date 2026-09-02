@@ -214,6 +214,9 @@ inside `.openclaw/trajectory-exports/` under the selected workspace.
 
 Run maintenance now instead of waiting for the next write cycle:
 
+Preview first: cleanup can still delete disposable sessions and detached
+artifacts, even though eligible durable conversations are archived in place.
+
 ```bash
 openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --agent work --dry-run
@@ -244,22 +247,31 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the total live session row count. Protected rows are
-  reported as `keep` and count toward the cap, but they are never automatic
-  eviction targets. If protected rows prevent cleanup from reaching the cap,
-  the store remains above it. `--enforce` does not remove that protection;
-  unarchive, unpin, wait for active work to finish, or explicitly delete
-  sessions you no longer want to retain.
+- `maxEntries` defaults to 5,000 unarchived sessions. Existing archives do not
+  count toward it. Age and count cleanup archive eligible durable conversations
+  in place; disposable runtime sessions retain their existing deletion rules.
+  Protected rows are reported as `keep`: main, pinned, model-locked, running or
+  admitted sessions, and routable direct, group, or thread conversations.
+  Protected unarchived rows still count and can keep the store above the cap.
+  `--enforce` does not remove protection or stop active work.
+- Archive actions are `archive-dashboard`, `archive-stale`, and
+  `archive-overflow`. The `archived` summary counts in-place archives;
+  `pruned` and `capped` count deleted disposable rows only. `beforeCount` and
+  `afterCount` remain total row counts, while `beforeActiveCount` and
+  `afterActiveCount` report the unarchived population used for the cap.
+- Archived and pinned logical sessions keep every owned SQLite history
+  generation during disk cleanup. The default 10-GiB budget and cleanup of
+  detached reset/delete transcript artifacts remain unchanged.
 
 Flags:
 
 | Flag                 | Description                                                                                                                                                                                                                                                                                                |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dry-run`          | Preview how many entries would be pruned/capped without writing. In text mode, prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label.                                                                                                       |
+| `--dry-run`          | Preview archives and deletions without writing. In text mode, prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label.                                                                                                                        |
 | `--enforce`          | Apply maintenance even when `session.maintenance.mode` is `warn`.                                                                                                                                                                                                                                          |
 | `--fix-missing`      | Remove legacy entries whose archived transcript artifacts are missing or header-only/empty, even if they would not normally age/count out yet.                                                                                                                                                             |
 | `--fix-dm-scope`     | When `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying removes those rows from SQLite and preserves their legacy transcript artifacts as deleted archives. |
-| `--active-key <key>` | Protect a specific active key from automatic maintenance. It still counts toward `maxEntries`. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                         |
+| `--active-key <key>` | Protect a specific active key from automatic maintenance. It counts toward `maxEntries` only while unarchived. Routable direct, group, and thread conversations are also protected.                                                                                                                        |
 | `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
 | `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
 | `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |
@@ -295,10 +307,13 @@ check filesystem permissions and retry after resolving the deletion failure.
       "agentId": "main",
       "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
       "beforeCount": 120,
-      "afterCount": 80,
+      "afterCount": 115,
+      "beforeActiveCount": 100,
+      "afterActiveCount": 60,
       "missing": 0,
       "dmScopeRetired": 0,
-      "pruned": 40,
+      "archived": 35,
+      "pruned": 5,
       "capped": 0
     },
     {
@@ -306,8 +321,11 @@ check filesystem permissions and retry after resolving the deletion failure.
       "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
       "beforeCount": 18,
       "afterCount": 18,
+      "beforeActiveCount": 12,
+      "afterActiveCount": 12,
       "missing": 0,
       "dmScopeRetired": 0,
+      "archived": 0,
       "pruned": 0,
       "capped": 0
     }

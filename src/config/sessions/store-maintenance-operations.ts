@@ -6,6 +6,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   archiveStaleDashboardEntries,
   capEntryCount,
+  countUnarchivedSessionEntries,
   getActiveSessionMaintenanceWarning,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
@@ -215,7 +216,7 @@ async function applyEnforcedMaintenance(params: {
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: Object.keys(params.operation.store).length,
+    entryCount: countUnarchivedSessionEntries(params.operation.store),
     force: params.forceMaintenance,
   })
     ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
@@ -226,19 +227,26 @@ async function applyEnforcedMaintenance(params: {
         preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
-  const archived = archiveStaleDashboardEntries(
+  let archived = archiveStaleDashboardEntries(
     params.operation.store,
     params.maintenance.archiveDashboardAfterMs,
-    { preserveKeys: params.preserveSessionKeys },
+    {
+      preserveKeys: params.preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    },
   );
+  const onArchived = () => {
+    archived += 1;
+  };
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
+    onArchived,
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },
     preserveKeys: params.preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
-  const countAfterPrune = Object.keys(params.operation.store).length;
+  const countAfterPrune = countUnarchivedSessionEntries(params.operation.store);
   const shouldRunCapMaintenance =
     params.forceMaintenance ||
     shouldRunSessionEntryMaintenance({
@@ -247,6 +255,7 @@ async function applyEnforcedMaintenance(params: {
     });
   const capped = shouldRunCapMaintenance
     ? capEntryCount(params.operation.store, params.maintenance.maxEntries, {
+        onArchived,
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
@@ -313,7 +322,7 @@ export async function applyFileBackedSessionStoreMaintenance(
     baseKeys: [params.activeSessionKey],
   });
   const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
-    entryCount: beforeCount,
+    entryCount: countUnarchivedSessionEntries(params.store),
     maxEntries: maintenance.maxEntries,
     force: forceMaintenance,
   });

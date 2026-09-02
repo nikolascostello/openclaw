@@ -244,27 +244,31 @@ shown:
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
       archiveDashboardAfter: "7d", // false or 0 disables
-      maxEntries: 500,
+      maxEntries: 5000,
       preserveRecent: "7d", // optional; false or omitted disables
     },
   },
 }
 ```
 
-For production-sized `maxEntries` limits, Gateway runtime writes use a small
+For production-sized `maxEntries` limits, Gateway runtime writes use a 10%
 high-water buffer and clean back down to the configured cap in batches.
 Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` counts every live session row. Archived or pinned sessions, active
-or admitted work, model-locked sessions, and durable external conversation
-pointers are protected from automatic eviction, but still consume the cap.
-Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
-runs out of eligible victims. The total can therefore remain above the cap when
-protected rows alone exceed it or active work temporarily blocks eviction.
-Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
-finish, or explicitly delete sessions you no longer want to retain.
+`maxEntries` defaults to **5,000 unarchived sessions**; explicitly configured
+limits still apply. Archived sessions do not consume the cap. Under age or
+count pressure, cleanup archives eligible durable conversations in place,
+preserving their identity and history. Disposable runtime sessions retain their
+existing deletion policy. The default `pruneAfter: "30d"` therefore archives
+eligible stale conversations rather than deleting them.
+
+Main sessions, pinned sessions, active or admitted work, model-locked sessions,
+and routable external conversations are protected from automatic archival and
+deletion. Protected unarchived rows still count, so they can keep the active
+population above the cap. Automatic archive skips running work; it does not
+stop a run to make room.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -273,9 +277,9 @@ maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
 
-Maintenance preserves durable external conversation pointers, including group
-sessions and thread-scoped chat sessions, while still allowing synthetic cron,
-hook, heartbeat, ACP, and sub-agent entries to age out.
+Maintenance preserves routable direct DMs, group sessions, and thread-scoped
+chat sessions so their next inbound message can continue normally. Synthetic
+cron, hook, heartbeat, ACP, and sub-agent entries can still age out.
 
 Shared or high-volume installations can set `preserveRecent` to protect
 recently active interactive sessions and every SQLite history generation owned
@@ -287,12 +291,18 @@ or disk target; it expires after the configured inactivity window.
 
 Recent-session protection does not change managed-worktree garbage collection;
 durable dashboard sessions auto-archive after 7 days of inactivity by default,
-while other session types still require an explicit archive action.
+and other eligible durable conversations archive under age or count pressure.
+Automatic archive uses the existing managed-worktree cleanup and restore path.
 
-Archived and pinned sessions are user-protected and exempt from every automatic
-maintenance path, including age pruning, entry caps, model-run cleanup, and
-disk-budget eviction. They remain protected until you unarchive, unpin, or
-explicitly delete them.
+Archived and pinned logical sessions retain all of their SQLite history
+generations through repeated maintenance and disk-budget cleanup, not only the
+current transcript. The default disk budget remains 10 GiB; protected history
+can keep usage above that target. Reset/delete transcript archive artifacts are
+separate and retain their existing cleanup rules.
+
+To continue an archived conversation, find it in the Control UI's **Archived**
+or **All** view and restore it. Restoring returns it to the active population;
+explicit deletion remains a separate destructive action.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

@@ -11,6 +11,7 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
+  parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
@@ -22,7 +23,7 @@ const log = createSubsystemLogger("sessions/store");
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SESSION_MAX_ENTRIES = 500;
+const DEFAULT_SESSION_MAX_ENTRIES = 5_000;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 // Conversation history stays in SQLite until physical main-file + WAL + artifact usage crosses
@@ -238,6 +239,11 @@ export function shouldRunSessionEntryMaintenance(params: {
   return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
+/** Archived conversations retain their rows without consuming active capacity. */
+export function countUnarchivedSessionEntries(store: Record<string, SessionEntry>): number {
+  return Object.values(store).filter((entry) => entry.archivedAt === undefined).length;
+}
+
 export function shouldRunModelRunPrune(params: {
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxEntries">;
   entryCount: number;
@@ -283,7 +289,7 @@ function isGatewayModelRunSessionKey(sessionKey: string): boolean {
 }
 
 /**
- * Remove entries whose `updatedAt` is older than the configured threshold.
+ * Archive durable conversations and remove disposable entries older than the threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
  * Mutates `store` in-place.
  */
@@ -293,6 +299,7 @@ export function pruneStaleEntries(
   opts: {
     log?: boolean;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -303,6 +310,7 @@ export function pruneStaleEntries(
   }
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
+  let archived = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (
       shouldPreserveMaintenanceEntry({
@@ -315,13 +323,18 @@ export function pruneStaleEntries(
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+      if (!isSyntheticSessionMaintenanceKey(key)) {
+        archiveMaintenanceEntry(key, entry, opts.onArchived);
+        archived += 1;
+        continue;
+      }
       opts.onPruned?.({ key, entry });
       delete store[key];
       pruned++;
     }
   }
-  if (pruned > 0 && opts.log !== false) {
-    log.info("pruned stale session entries", { pruned, maxAgeMs });
+  if ((pruned > 0 || archived > 0) && opts.log !== false) {
+    log.info("maintained stale session entries", { pruned, archived, maxAgeMs });
   }
   return pruned;
 }
@@ -428,6 +441,16 @@ function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): numbe
   );
 }
 
+function archiveMaintenanceEntry(
+  key: string,
+  entry: SessionEntry,
+  onArchived?: (params: { key: string; entry: SessionEntry }) => void,
+  now = Date.now(),
+): void {
+  entry.archivedAt = now;
+  onArchived?.({ key, entry });
+}
+
 /** Archive inactive dashboard sessions while retaining runtime-owned or explicitly active keys. */
 export function archiveStaleDashboardEntries(
   store: Record<string, SessionEntry>,
@@ -437,6 +460,7 @@ export function archiveStaleDashboardEntries(
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
+    preserveRecentMs?: number | null;
   } = {},
 ): number {
   if (archiveAfterMs == null || archiveAfterMs <= 0) {
@@ -449,9 +473,7 @@ export function archiveStaleDashboardEntries(
     const parsed = parseAgentSessionKey(key);
     if (
       !parsed?.rest.startsWith("dashboard:") ||
-      entry.pinnedAt !== undefined ||
-      entry.archivedAt !== undefined ||
-      opts.preserveKeys?.has(key) === true
+      shouldPreserveMaintenanceEntry({ key, entry, ...opts })
     ) {
       continue;
     }
@@ -459,8 +481,7 @@ export function archiveStaleDashboardEntries(
     if (activityAt <= 0 || activityAt >= cutoffMs) {
       continue;
     }
-    entry.archivedAt = now;
-    opts.onArchived?.({ key, entry });
+    archiveMaintenanceEntry(key, entry, opts.onArchived, now);
     archived += 1;
   }
   if (archived > 0 && opts.log !== false) {
@@ -505,8 +526,10 @@ function isProtectedExternalConversationSessionKey(sessionKey: string): boolean 
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   return (
-    /^[^:]+:(?:group|channel):.+$/.test(rest) ||
-    /^telegram:(?:direct|dm):.+:topic:[^:]+$/.test(rest)
+    parseSessionDeliveryRoute(sessionKey) !== null ||
+    // per-peer DM routes omit the channel (buildAgentPeerSessionKey).
+    /^direct:.+$/.test(rest) ||
+    /^[^:]+:(?:group|channel):.+$/.test(rest)
   );
 }
 
@@ -533,7 +556,10 @@ function isProtectedSessionMaintenanceEntry(
   if (parseThreadSessionSuffix(sessionKey).threadId) {
     return true;
   }
-  if (isProtectedExternalConversationSessionKey(sessionKey)) {
+  if (
+    entry?.delivery?.kind === "external" ||
+    isProtectedExternalConversationSessionKey(sessionKey)
+  ) {
     return true;
   }
   const chatType = normalizeLowercaseStringOrEmpty(
@@ -558,6 +584,7 @@ export function shouldPreserveMaintenanceEntry(params: {
   // configured retention limits while the lock remains.
   return (
     params.entry?.modelSelectionLocked === true ||
+    params.entry?.status === "running" ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
@@ -571,13 +598,12 @@ function selectSessionEntryCapVictims(
   preserveRecentMs?: number | null,
 ): string[] {
   const keys = Object.keys(store);
-  const overflow = keys.length - Math.max(0, maxEntries);
+  const overflow = countUnarchivedSessionEntries(store) - Math.max(0, maxEntries);
   if (overflow <= 0) {
     return [];
   }
 
-  // All persisted rows consume the cap, but protected rows are never victims. If protected rows
-  // alone exceed the cap, maintenance removes every eligible row and leaves the excess intact.
+  // Protected unarchived rows consume capacity but never become victims.
   const eligibleKeys = keys.filter(
     (key) =>
       !shouldPreserveMaintenanceEntry({
@@ -652,9 +678,8 @@ export function getActiveSessionMaintenanceWarning(params: {
 }
 
 /**
- * Cap the total store to N entries by removing the oldest eviction-eligible rows.
- * Protected rows count toward the cap but are never removed, so a store whose protected rows
- * alone exceed the cap remains above it until protection is released or rows are deleted.
+ * Cap unarchived entries, archiving durable conversations and deleting disposable rows.
+ * Protected active rows can keep the store above the cap. Returns only the deleted count.
  * Mutates `store` in-place.
  */
 export function capEntryCount(
@@ -663,6 +688,7 @@ export function capEntryCount(
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+    onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -676,15 +702,25 @@ export function capEntryCount(
   if (toRemove.length === 0) {
     return 0;
   }
+  let removed = 0;
   for (const key of toRemove) {
     const entry = store[key];
+    if (entry && !isSyntheticSessionMaintenanceKey(key)) {
+      archiveMaintenanceEntry(key, entry, opts.onArchived);
+      continue;
+    }
     if (entry) {
       opts.onCapped?.({ key, entry });
     }
     delete store[key];
+    removed += 1;
   }
   if (opts.log !== false) {
-    log.info("capped session entry count", { removed: toRemove.length, maxEntries });
+    log.info("capped session entry count", {
+      removed,
+      archived: toRemove.length - removed,
+      maxEntries,
+    });
   }
-  return toRemove.length;
+  return removed;
 }

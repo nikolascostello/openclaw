@@ -88,6 +88,7 @@ export function readSessionMaintenanceCapCandidates(params: {
     db
       .selectFrom("session_nodes")
       .select([sessionEntryMetadataJson, "current_session_id", "session_key", "updated_at"])
+      .where("archived_at", "is", null)
       .orderBy("updated_at", "asc")
       // Stable cap ties previously inherited full-store session-key order.
       .orderBy("session_key", "asc"),

@@ -724,40 +724,40 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       }
     });
 
-    t(
-      "prunes stale SQLite entries below the entry cap without parsing on every write",
-      async () => {
-        const scope = sqliteAdapter.entryScope(paths);
-        const staleScope = {
-          ...scope,
-          sessionKey: "agent:main:stale-under-cap",
-        };
-        const staleEntry = {
-          model: "stale",
-          sessionId: "stale-under-cap",
-          updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
-        };
-        await patchSessionEntryCore(staleScope, () => staleEntry, {
-          fallbackEntry: staleEntry,
-          replaceEntry: true,
-          skipMaintenance: true,
-        });
+    t("archives stale SQLite conversations below the entry cap on ordinary writes", async () => {
+      const scope = sqliteAdapter.entryScope(paths);
+      const staleScope = {
+        ...scope,
+        sessionKey: "agent:main:stale-under-cap",
+      };
+      const staleEntry = {
+        model: "stale",
+        sessionId: "stale-under-cap",
+        updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
+      };
+      await patchSessionEntryCore(staleScope, () => staleEntry, {
+        fallbackEntry: staleEntry,
+        replaceEntry: true,
+        skipMaintenance: true,
+      });
 
-        await upsertSessionEntryCore(scope, {
-          model: "fresh",
-          sessionId: "fresh-session",
-          updatedAt: Date.now(),
-        });
+      await upsertSessionEntryCore(scope, {
+        model: "fresh",
+        sessionId: "fresh-session",
+        updatedAt: Date.now(),
+      });
 
-        await vi.waitFor(() => {
-          expect(loadSessionEntry(staleScope)).toBeUndefined();
+      await vi.waitFor(() => {
+        expect(loadSessionEntry(staleScope)).toMatchObject({
+          ...staleEntry,
+          archivedAt: expect.any(Number),
         });
-        expect(loadSessionEntry(scope)).toMatchObject({
-          model: "fresh",
-          sessionId: "fresh-session",
-        });
-      },
-    );
+      });
+      expect(loadSessionEntry(scope)).toMatchObject({
+        model: "fresh",
+        sessionId: "fresh-session",
+      });
+    });
 
     t("serializes concurrent SQLite entry patches", async () => {
       const scope = sqliteAdapter.entryScope(paths);
@@ -1560,7 +1560,7 @@ describe("sqlite session normalization", () => {
       ["active", Date.now()],
     ] as const) {
       const entry = { sessionId: `${key}-session`, updatedAt };
-      await patchSessionEntryCore(scopeFor(`agent:main:${key}`), () => entry, {
+      await patchSessionEntryCore(scopeFor(`agent:main:hook:${key}`), () => entry, {
         fallbackEntry: entry,
         replaceEntry: true,
         skipMaintenance: true,
@@ -1572,7 +1572,7 @@ describe("sqlite session normalization", () => {
       type: "metadata",
     };
     await appendTranscriptEvent(
-      { ...scopeFor("agent:main:stale"), sessionId: "stale-session" },
+      { ...scopeFor("agent:main:hook:stale"), sessionId: "stale-session" },
       staleTranscriptEvent,
     );
     // A publisher's temporary file must not satisfy the archive-ready check.
@@ -1585,7 +1585,7 @@ describe("sqlite session normalization", () => {
       pendingArchive.bytes,
     );
 
-    await patchSessionEntryCore(scopeFor("agent:main:active"), () => ({ model: "gpt-5.5" }), {
+    await patchSessionEntryCore(scopeFor("agent:main:hook:active"), () => ({ model: "gpt-5.5" }), {
       skipMaintenance: true,
     });
     await expect(
@@ -1602,11 +1602,11 @@ describe("sqlite session normalization", () => {
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active", "agent:main:older", "agent:main:stale"]);
+    ).toEqual(["agent:main:hook:active", "agent:main:hook:older", "agent:main:hook:stale"]);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
-    await patchSessionEntryCore(scopeFor("agent:main:active"), () => ({
+    await patchSessionEntryCore(scopeFor("agent:main:hook:active"), () => ({
       providerOverride: "openai",
     }));
     let archivedStale: string[] = [];
@@ -1632,7 +1632,7 @@ describe("sqlite session normalization", () => {
         env,
         storePath: paths.sqlitePath,
       }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active"]);
+    ).toEqual(["agent:main:hook:active"]);
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -1649,7 +1649,7 @@ describe("sqlite session normalization", () => {
     ).toEqual([staleTranscriptEvent]);
 
     await patchSessionEntryCore(
-      scopeFor("agent:main:newer"),
+      scopeFor("agent:main:hook:newer"),
       () => ({ sessionId: "newer-session", updatedAt: Date.now() + 1 }),
       {
         fallbackEntry: { sessionId: "newer-session", updatedAt: Date.now() + 1 },
@@ -1658,7 +1658,7 @@ describe("sqlite session normalization", () => {
       },
     );
     await patchSessionEntryCore(
-      scopeFor("agent:main:newest"),
+      scopeFor("agent:main:hook:newest"),
       () => ({ sessionId: "newest-session", updatedAt: Date.now() + 2 }),
       {
         fallbackEntry: { sessionId: "newest-session", updatedAt: Date.now() + 2 },
@@ -1674,7 +1674,7 @@ describe("sqlite session normalization", () => {
             env,
             storePath: paths.sqlitePath,
           }).map((summary) => summary.sessionKey),
-        ).toEqual(["agent:main:newer", "agent:main:newest"]);
+        ).toEqual(["agent:main:hook:newer", "agent:main:hook:newest"]);
       },
       { timeout: 5_000 },
     );
@@ -1963,7 +1963,9 @@ describe("sqlite session normalization", () => {
           agentId: "main",
           env,
           storePath: paths.sqlitePath,
-        }).map((summary) => summary.sessionKey),
+        })
+          .filter((summary) => summary.entry.archivedAt === undefined)
+          .map((summary) => summary.sessionKey),
       ).toEqual(["agent:main:maintenance-trigger", pinnedKey]);
     });
     await expect(

@@ -34,6 +34,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   archiveStaleDashboardEntries,
   capEntryCount,
+  countUnarchivedSessionEntries,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
   shouldPreserveMaintenanceEntry,
@@ -69,9 +70,13 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   fixDmScope?: boolean;
 };
 
+export type SessionCleanupArchiveAction =
+  | "archive-dashboard"
+  | "archive-stale"
+  | "archive-overflow";
 type SessionCleanupAction =
   | "keep"
-  | "archive-dashboard"
+  | SessionCleanupArchiveAction
   | "prune-missing"
   | "prune-model-run"
   | "prune-stale"
@@ -85,7 +90,7 @@ type SessionsCleanupRunResult = {
     beforeStore: Record<string, SessionEntry>;
     missingKeys: Set<string>;
     modelRunPrunedKeys: Set<string>;
-    archivedKeys?: Set<string>;
+    archivedKeys?: Map<string, SessionCleanupArchiveAction>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
@@ -161,7 +166,7 @@ export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
-  archivedKeys?: Set<string>;
+  archivedKeys?: Map<string, SessionCleanupArchiveAction>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -175,8 +180,9 @@ export function resolveSessionCleanupAction(params: {
   if (params.modelRunPrunedKeys.has(params.key)) {
     return "prune-model-run";
   }
-  if (params.archivedKeys?.has(params.key)) {
-    return "archive-dashboard";
+  const archiveAction = params.archivedKeys?.get(params.key);
+  if (archiveAction) {
+    return archiveAction;
   }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
@@ -340,7 +346,7 @@ async function previewStoreCleanup(params: {
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const modelRunPrunedKeys = new Set<string>();
-  const archivedKeys = new Set<string>();
+  const archivedKeys = new Map<string, SessionCleanupArchiveAction>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -371,7 +377,7 @@ async function previewStoreCleanup(params: {
   });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: Object.keys(previewStore).length,
+    entryCount: countUnarchivedSessionEntries(previewStore),
     // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
     // preview caps unconditionally below), so mirror that here: prune stale probes before the
     // forced cap can evict real sessions in their place.
@@ -386,18 +392,18 @@ async function previewStoreCleanup(params: {
         },
       })
     : 0;
-  const archived = archiveStaleDashboardEntries(
-    previewStore,
-    params.maintenance.archiveDashboardAfterMs,
-    {
-      log: false,
-      onArchived: ({ key }) => {
-        archivedKeys.add(key);
-      },
-      preserveKeys: preserveSessionKeys,
+  archiveStaleDashboardEntries(previewStore, params.maintenance.archiveDashboardAfterMs, {
+    log: false,
+    onArchived: ({ key }) => {
+      archivedKeys.set(key, "archive-dashboard");
     },
-  );
+    preserveKeys: preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
+  });
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
+    onArchived: ({ key }) => {
+      archivedKeys.set(key, "archive-stale");
+    },
     log: false,
     preserveKeys: preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -406,6 +412,9 @@ async function previewStoreCleanup(params: {
     },
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
+    onArchived: ({ key }) => {
+      archivedKeys.set(key, "archive-overflow");
+    },
     log: false,
     preserveKeys: preserveSessionKeys,
     preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -456,6 +465,7 @@ async function previewStoreCleanup(params: {
   });
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
+  const archived = archivedKeys.size;
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
@@ -475,6 +485,8 @@ async function previewStoreCleanup(params: {
     dryRun: params.dryRun,
     beforeCount,
     afterCount: afterPreviewCount,
+    beforeActiveCount: countUnarchivedSessionEntries(beforeStore),
+    afterActiveCount: countUnarchivedSessionEntries(previewStore),
     missing,
     dmScopeRetired,
     modelRunPruned,
@@ -633,6 +645,8 @@ export async function runSessionsCleanup(params: {
           dryRun: false,
           beforeCount: lifecycleResult.beforeCount,
           afterCount: lifecycleResult.afterCount,
+          beforeActiveCount: lifecycleResult.beforeActiveCount,
+          afterActiveCount: lifecycleResult.afterActiveCount,
           missing,
           dmScopeRetired,
           modelRunPruned: lifecycleResult.modelRunPruned,

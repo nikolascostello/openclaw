@@ -46,7 +46,7 @@ function createPlannerStore(entryCount: number) {
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   for (let index = 0; index < entryCount; index += 1) {
     replaceSessionEntrySync(
-      { sessionKey: `agent:main:planner-${index}`, storePath },
+      { sessionKey: `agent:main:hook:planner-${index}`, storePath },
       { sessionId: `planner-${index}`, updatedAt: index + 1 },
     );
   }
@@ -65,7 +65,7 @@ it.each([false, true])(
   "does not rescan unrelated rows when no lifecycle removal matches (requested: %s)",
   async (requestRemoval) => {
     const { storePath } = createPlannerStore(2);
-    const retained = { sessionKey: "agent:main:planner-1", sessionId: "planner-1", storePath };
+    const retained = { sessionKey: "agent:main:hook:planner-1", sessionId: "planner-1", storePath };
     const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
     replaceTranscriptEventsSync(retained, transcript);
     const parseSpy = vi.spyOn(JSON, "parse");
@@ -76,7 +76,7 @@ it.each([false, true])(
         removals: requestRemoval ? [{ sessionKey: "agent:main:missing" }] : [],
         upserts: [
           {
-            sessionKey: "agent:main:planner-0",
+            sessionKey: "agent:main:hook:planner-0",
             buildEntry: async ({ currentEntry }) => ({ ...currentEntry!, label: "updated" }),
           },
         ],
@@ -92,7 +92,7 @@ it.each([false, true])(
       parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
     ).toBeLessThanOrEqual(3);
     parseSpy.mockRestore();
-    expect(loadSessionEntry({ sessionKey: "agent:main:planner-0", storePath })?.label).toBe(
+    expect(loadSessionEntry({ sessionKey: "agent:main:hook:planner-0", storePath })?.label).toBe(
       "updated",
     );
     expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
@@ -103,7 +103,7 @@ it.each([false, true])(
 it("releases the store writer before maintenance archive sizing completes", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const removedKey = "agent:main:maintenance-sizing-removed";
+  const removedKey = "agent:main:hook:maintenance-sizing-removed";
   const writerKey = "agent:main:maintenance-sizing-writer";
   replaceSessionEntrySync(
     { sessionKey: removedKey, storePath },
@@ -161,7 +161,7 @@ it("releases the store writer before maintenance archive sizing completes", asyn
 it("does not hold channel recording behind automatic session maintenance", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const staleSessionKey = "agent:main:maintenance-ingress-stale";
+  const staleSessionKey = "agent:main:hook:maintenance-ingress-stale";
   replaceSessionEntrySync(
     { sessionKey: staleSessionKey, storePath },
     { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
@@ -205,7 +205,7 @@ it("does not hold channel recording behind automatic session maintenance", async
     entryWrite.then(() => "entry-write" as const),
     materializationStarted.then(() => "maintenance" as const),
   ]);
-  const laterStaleSessionKey = "agent:main:maintenance-ingress-later-stale";
+  const laterStaleSessionKey = "agent:main:hook:maintenance-ingress-later-stale";
   if (firstCompleted === "entry-write") {
     await materializationStarted;
     replaceSessionEntrySync(
@@ -267,7 +267,7 @@ it.each([
       await applySessionEntryLifecycleMutation({
         storePath,
         removals: Array.from({ length: 65 }, (_, index) => ({
-          sessionKey: `agent:main:planner-${index + 1}`,
+          sessionKey: `agent:main:hook:planner-${index + 1}`,
         })),
         skipMaintenance: true,
       }),
@@ -278,7 +278,7 @@ it.each([
     mutate: async (storePath: string) =>
       await cleanupSessionLifecycleArtifactsCore({
         storePath,
-        sessionKeySegmentPrefix: "planner-",
+        sessionKeySegmentPrefix: "hook:planner-",
         transcriptContentMarker: "planner-marker",
         orphanTranscriptMinAgeMs: 1,
         nowMs: 66,
@@ -308,7 +308,7 @@ it("does not refresh planner statistics after one routine session deletion", asy
   await expect(
     applySessionEntryLifecycleMutation({
       storePath,
-      removals: [{ sessionKey: "agent:main:planner-65" }],
+      removals: [{ sessionKey: "agent:main:hook:planner-65" }],
       skipMaintenance: true,
     }),
   ).resolves.toMatchObject({ afterCount: 65, removedEntries: 1 });

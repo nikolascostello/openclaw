@@ -19,6 +19,7 @@ import {
   type SessionsCleanupOptions,
   type SessionsCleanupResult,
 } from "../config/sessions.js";
+import type { SessionCleanupArchiveAction } from "../config/sessions/cleanup-service.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
@@ -55,7 +56,11 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(action);
   }
-  if (action === "archive-dashboard") {
+  if (
+    action === "archive-dashboard" ||
+    action === "archive-stale" ||
+    action === "archive-overflow"
+  ) {
     return theme.warn(action);
   }
   if (action === "prune-missing") {
@@ -80,7 +85,7 @@ function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
-  archivedKeys?: Set<string>;
+  archivedKeys?: Map<string, SessionCleanupArchiveAction>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -113,7 +118,7 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep" || actionRow.action === "archive-dashboard") {
+    if (actionRow.action === "keep" || actionRow.action.startsWith("archive-")) {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -175,7 +180,17 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
-  params.runtime.log(`Would archive inactive dashboard sessions: ${params.summary.archived ?? 0}`);
+  if (
+    params.summary.beforeActiveCount !== undefined &&
+    params.summary.afterActiveCount !== undefined
+  ) {
+    params.runtime.log(
+      `Unarchived entries: ${params.summary.beforeActiveCount} -> ${params.summary.afterActiveCount}`,
+    );
+  }
+  params.runtime.log(
+    `Would archive inactive or overflow conversations: ${params.summary.archived ?? 0}`,
+  );
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -238,6 +253,11 @@ function renderAppliedSummaries(params: {
       : summary.storePath;
     params.runtime.log(`Session store: ${storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+    if (summary.afterActiveCount !== undefined) {
+      params.runtime.log(
+        `Unarchived entries: ${summary.afterActiveCount}; archived this pass: ${summary.archived ?? 0}`,
+      );
+    }
     if (summary.unreferencedArtifacts?.removedFiles) {
       params.runtime.log(
         `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,

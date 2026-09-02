@@ -9,7 +9,6 @@ import type { RuntimeEnv } from "../runtime.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   resolveSessionStoreTargetsOrExit: vi.fn(),
-  resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
   runLocalSessionsCleanup: vi.fn(),
   callGateway: vi.fn(),
@@ -29,7 +28,6 @@ vi.mock("./session-store-targets.js", () => ({
 
 vi.mock("../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions.js")>()),
-  resolveSessionCleanupAction: mocks.resolveSessionCleanupAction,
   runSessionsCleanup: mocks.runSessionsCleanup,
 }));
 
@@ -100,30 +98,6 @@ describe("sessionsCleanupCommand", () => {
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
     mocks.callGateway.mockResolvedValue(null);
-    mocks.resolveSessionCleanupAction.mockImplementation(
-      (params: {
-        key: string;
-        missingKeys: Set<string>;
-        staleKeys: Set<string>;
-        cappedKeys: Set<string>;
-        dmScopeRetiredKeys: Set<string>;
-        modelRunPrunedKeys?: Set<string>;
-      }) => {
-        if (params.dmScopeRetiredKeys.has(params.key)) {
-          return "retire-dm-scope";
-        }
-        if (params.missingKeys.has(params.key)) {
-          return "prune-missing";
-        }
-        if (params.staleKeys.has(params.key)) {
-          return "prune-stale";
-        }
-        if (params.cappedKeys.has(params.key)) {
-          return "cap-overflow";
-        }
-        return "keep";
-      },
-    );
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [],
@@ -504,7 +478,7 @@ describe("sessionsCleanupCommand", () => {
     });
   });
 
-  it("renders a dry-run action table with keep/prune actions", async () => {
+  it("renders archive reasons and retained totals separately from deleted rows", async () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
@@ -514,8 +488,11 @@ describe("sessionsCleanupCommand", () => {
             storePath: "/resolved/sessions.json",
             mode: "warn",
             dryRun: true,
-            beforeCount: 2,
-            afterCount: 1,
+            beforeCount: 5,
+            afterCount: 4,
+            beforeActiveCount: 5,
+            afterActiveCount: 1,
+            archived: 3,
             missing: 0,
             dmScopeRetired: 0,
             modelRunPruned: 0,
@@ -533,7 +510,15 @@ describe("sessionsCleanupCommand", () => {
           beforeStore: {
             stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
             fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
+            dashboard: { sessionId: "dashboard", updatedAt: 1 },
+            aged: { sessionId: "aged", updatedAt: 1 },
+            overflow: { sessionId: "overflow", updatedAt: 1 },
           },
+          archivedKeys: new Map([
+            ["dashboard", "archive-dashboard"],
+            ["aged", "archive-stale"],
+            ["overflow", "archive-overflow"],
+          ]),
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
@@ -566,6 +551,12 @@ describe("sessionsCleanupCommand", () => {
     expect(actionKeys).toContainEqual(["Action", "Key"]);
     expect(actionKeys).toContainEqual(["keep", "fresh"]);
     expect(actionKeys).toContainEqual(["prune-stale", "stale"]);
+    expect(actionKeys).toContainEqual(["archive-dashboard", "dashboard"]);
+    expect(actionKeys).toContainEqual(["archive-stale", "aged"]);
+    expect(actionKeys).toContainEqual(["archive-overflow", "overflow"]);
+    expectLogsToInclude(logs, "Total: 4 kept, 1 pruned");
+    expectLogsToInclude(logs, "Unarchived entries: 5 -> 1");
+    expectLogsToInclude(logs, "Would archive inactive or overflow conversations: 3");
   });
 
   it("finishes a large distinct-label preview with the normal CLI process stack", () => {
@@ -665,6 +656,7 @@ describe("sessionsCleanupCommand", () => {
           },
           missingKeys: new Set<string>(),
           staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
+          modelRunPrunedKeys: new Set<string>(),
           cappedKeys: new Set(["directCapped"]),
           dmScopeRetiredKeys: new Set<string>(),
         },
@@ -733,6 +725,7 @@ describe("sessionsCleanupCommand", () => {
           },
           missingKeys: new Set<string>(),
           staleKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
         },

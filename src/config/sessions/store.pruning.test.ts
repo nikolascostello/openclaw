@@ -81,21 +81,21 @@ describe("pruneStaleEntries", () => {
   it("removes entries older than maxAgeDays", () => {
     const now = Date.now();
     const store = makeStore([
-      ["old", makeEntry(now - 31 * DAY_MS)],
-      ["fresh", makeEntry(now - DAY_MS)],
+      ["hook:old", makeEntry(now - 31 * DAY_MS)],
+      ["hook:fresh", makeEntry(now - DAY_MS)],
     ]);
 
     const pruned = pruneStaleEntries(store, 30 * DAY_MS);
 
     expect(pruned).toBe(1);
-    expect(store.old).toBeUndefined();
-    expect(store).toHaveProperty("fresh");
+    expect(store["hook:old"]).toBeUndefined();
+    expect(store).toHaveProperty("hook:fresh");
   });
 
   it("preserves durable external conversation entries", () => {
     const now = Date.now();
     const store = makeStore([
-      ["old", makeEntry(now - 31 * DAY_MS)],
+      ["hook:old", makeEntry(now - 31 * DAY_MS)],
       ["agent:main:slack:channel:C123:thread:1710000000.000100", makeEntry(now - 31 * DAY_MS)],
       ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 31 * DAY_MS)],
       ["agent:main:slack:channel:C999", makeEntry(now - 31 * DAY_MS)],
@@ -106,7 +106,7 @@ describe("pruneStaleEntries", () => {
     const pruned = pruneStaleEntries(store, 30 * DAY_MS);
 
     expect(pruned).toBe(1);
-    expect(store.old).toBeUndefined();
+    expect(store["hook:old"]).toBeUndefined();
     expect(store).toHaveProperty("agent:main:slack:channel:C123:thread:1710000000.000100");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
@@ -119,14 +119,14 @@ describe("pruneStaleEntries", () => {
     const lockedKey = "agent:main:harness-owned:locked";
     const store = makeStore([
       [lockedKey, { ...makeEntry(now - 31 * DAY_MS), modelSelectionLocked: true }],
-      ["old", makeEntry(now - 31 * DAY_MS)],
+      ["hook:old", makeEntry(now - 31 * DAY_MS)],
     ]);
 
     const pruned = pruneStaleEntries(store, 30 * DAY_MS);
 
     expect(pruned).toBe(1);
     expect(store).toHaveProperty(lockedKey);
-    expect(store.old).toBeUndefined();
+    expect(store["hook:old"]).toBeUndefined();
   });
 
   it("preserves archived entries until they are unarchived", () => {
@@ -139,8 +139,8 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("archived");
 
     delete store.archived?.archivedAt;
-    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
-    expect(store.archived).toBeUndefined();
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store.archived?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("preserves pinned entries until they are unpinned", () => {
@@ -153,8 +153,8 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("pinned");
 
     delete store.pinned?.pinnedAt;
-    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
-    expect(store.pinned).toBeUndefined();
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store.pinned?.archivedAt).toEqual(expect.any(Number));
   });
 });
 
@@ -224,16 +224,16 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
-      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["hook:stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
       [
-        "stale-shared",
+        "hook:stale-shared",
         {
           sessionId: "shared-session",
           updatedAt: now - 30 * DAY_MS,
         },
       ],
-      ["fresh-shared", { sessionId: "shared-session", updatedAt: now }],
-      ["active", { sessionId: "active-session", updatedAt: now - 30 * DAY_MS }],
+      ["hook:fresh-shared", { sessionId: "shared-session", updatedAt: now }],
+      ["hook:active", { sessionId: "active-session", updatedAt: now - 30 * DAY_MS }],
     ]);
     const archiveCalls: Array<{
       removedSessionFiles: Array<[string, string | undefined]>;
@@ -244,7 +244,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     const result = await applyFileBackedSessionStoreMaintenance({
       storePath: "/tmp/openclaw-sessions/sessions.json",
       store,
-      activeSessionKey: "active",
+      activeSessionKey: "hook:active",
       maintenanceConfig: {
         mode: "enforce",
         pruneAfterMs: 7 * DAY_MS,
@@ -271,10 +271,10 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
 
     expect(result.changedStore).toBe(true);
-    expect(store.stale).toBeUndefined();
-    expect(store["stale-shared"]).toBeUndefined();
-    expect(store).toHaveProperty("fresh-shared");
-    expect(store).toHaveProperty("active");
+    expect(store["hook:stale"]).toBeUndefined();
+    expect(store["hook:stale-shared"]).toBeUndefined();
+    expect(store).toHaveProperty("hook:fresh-shared");
+    expect(store).toHaveProperty("hook:active");
     expect(archiveCalls).toEqual([
       {
         removedSessionFiles: [
@@ -290,8 +290,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("reports archive retention failure without aborting file-backed maintenance", async () => {
     const now = Date.now();
     const store = makeStore([
-      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
-      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+      ["hook:stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["hook:fresh", { sessionId: "fresh-session", updatedAt: now }],
     ]);
     const cleanupError = new Error("archive cleanup denied");
     const warn = vi.fn();
@@ -321,8 +321,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
 
     expect(result.changedStore).toBe(true);
-    expect(store.stale).toBeUndefined();
-    expect(store).toHaveProperty("fresh");
+    expect(store["hook:stale"]).toBeUndefined();
+    expect(store).toHaveProperty("hook:fresh");
     expect(onMaintenanceApplied).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith("session transcript archive retention cleanup failed", {
       error: String(cleanupError),
@@ -331,8 +331,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
 
   it.each([
     { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0, probePresent: false },
-    { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1, probePresent: true },
-    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 1, probePresent: true },
+    { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 0, probePresent: true },
+    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 0, probePresent: true },
   ])(
     "applies model-run retention $modelRunPruneAfterMs before forced capping",
     async ({ modelRunPruneAfterMs, modelRunPruned, capped, probePresent }) => {
@@ -378,19 +378,24 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       expect(report?.modelRunPruned).toBe(modelRunPruned);
       expect(report?.capped).toBe(capped);
       expect(store[staleProbe] != null).toBe(probePresent);
-      expect(Object.keys(store)).toHaveLength(50);
-      expect(Object.keys(store).filter((key) => key.includes(":real-"))).toHaveLength(50 - capped);
+      expect(Object.values(store).filter((entry) => entry.archivedAt === undefined)).toHaveLength(
+        50,
+      );
+      expect(Object.keys(store).filter((key) => key.includes(":real-"))).toHaveLength(50);
+      expect(Object.values(store).filter((entry) => entry.archivedAt !== undefined)).toHaveLength(
+        probePresent ? 1 : 0,
+      );
     },
   );
 
-  it("counts protected sessions when triggering capping but never evicts them", async () => {
+  it("excludes archived sessions from the active cap", async () => {
     const now = Date.now();
     const store = makeStore([
       ["archived-1", { ...makeEntry(now - 5), archivedAt: now }],
       ["archived-2", { ...makeEntry(now - 4), archivedAt: now }],
       ["archived-3", { ...makeEntry(now - 3), archivedAt: now }],
-      ["dashboard-1", makeEntry(now - 2)],
-      ["dashboard-2", makeEntry(now - 1)],
+      ["hook:dashboard-1", makeEntry(now - 2)],
+      ["hook:dashboard-2", makeEntry(now - 1)],
     ]);
     let capped: number | undefined;
 
@@ -413,13 +418,13 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       artifacts: createMaintenanceArtifacts(),
     });
 
-    expect(capped).toBe(2);
-    expect(Object.keys(store)).toHaveLength(3);
+    expect(capped).toBe(0);
+    expect(Object.keys(store)).toHaveLength(5);
     expect(store).toHaveProperty("archived-1");
     expect(store).toHaveProperty("archived-2");
     expect(store).toHaveProperty("archived-3");
-    expect(store["dashboard-1"]).toBeUndefined();
-    expect(store["dashboard-2"]).toBeUndefined();
+    expect(store["hook:dashboard-1"]?.archivedAt).toBeUndefined();
+    expect(store["hook:dashboard-2"]?.archivedAt).toBeUndefined();
   });
 
   it.each([
@@ -467,8 +472,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         key,
         { sessionId, updatedAt: now - preserved.length - 1 + index },
       ]),
-      ["removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
-      ["removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
+      ["hook:removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
+      ["hook:removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
     ]);
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -500,8 +505,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       for (const [key] of preserved) {
         expect(store).toHaveProperty(key);
       }
-      expect(store["removable-old"]).toBeUndefined();
-      expect(store["removable-recent"]).toBeUndefined();
+      expect(store["hook:removable-old"]).toBeUndefined();
+      expect(store["hook:removable-recent"]).toBeUndefined();
     } finally {
       admission.release();
       unregisterProvider?.();
@@ -530,8 +535,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
 
     try {
       const otherStore = makeStore([
-        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
-        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+        ["hook:old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["hook:new", { sessionId: "new-session", updatedAt: now - 1 }],
       ]);
       await applyFileBackedSessionStoreMaintenance({
         storePath: maintainedStorePath,
@@ -540,11 +545,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
-      expect(otherStore.old).toBeUndefined();
+      expect(otherStore["hook:old"]).toBeUndefined();
 
       const activeStore = makeStore([
-        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
-        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+        ["hook:old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["hook:new", { sessionId: "new-session", updatedAt: now - 1 }],
       ]);
       await applyFileBackedSessionStoreMaintenance({
         storePath: activeStorePath,
@@ -553,7 +558,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
-      expect(activeStore).toHaveProperty("old");
+      expect(activeStore).toHaveProperty("hook:old");
 
       admission.release();
       await applyFileBackedSessionStoreMaintenance({
@@ -563,7 +568,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
-      expect(activeStore.old).toBeUndefined();
+      expect(activeStore["hook:old"]).toBeUndefined();
     } finally {
       admission.release();
     }
@@ -683,22 +688,22 @@ describe("capEntryCount", () => {
   it("over limit: keeps N most recent by updatedAt, deletes rest", () => {
     const now = Date.now();
     const store = makeStore([
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["mid", makeEntry(now - 2 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
+      ["hook:oldest", makeEntry(now - 4 * DAY_MS)],
+      ["hook:old", makeEntry(now - 3 * DAY_MS)],
+      ["hook:mid", makeEntry(now - 2 * DAY_MS)],
+      ["hook:recent", makeEntry(now - DAY_MS)],
+      ["hook:newest", makeEntry(now)],
     ]);
 
     const evicted = capEntryCount(store, 3);
 
     expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(3);
-    expect(store).toHaveProperty("newest");
-    expect(store).toHaveProperty("recent");
-    expect(store).toHaveProperty("mid");
-    expect(store.oldest).toBeUndefined();
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("hook:newest");
+    expect(store).toHaveProperty("hook:recent");
+    expect(store).toHaveProperty("hook:mid");
+    expect(store["hook:oldest"]).toBeUndefined();
+    expect(store["hook:old"]).toBeUndefined();
   });
 
   it("preserves durable external conversation entries when capping", () => {
@@ -706,10 +711,10 @@ describe("capEntryCount", () => {
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
     const store = makeStore([
       [threadKey, makeEntry(now - 5 * DAY_MS)],
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
+      ["hook:oldest", makeEntry(now - 4 * DAY_MS)],
+      ["hook:old", makeEntry(now - 3 * DAY_MS)],
+      ["hook:recent", makeEntry(now - DAY_MS)],
+      ["hook:newest", makeEntry(now)],
     ]);
 
     const evicted = capEntryCount(store, 3);
@@ -717,10 +722,10 @@ describe("capEntryCount", () => {
     expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(3);
     expect(store).toHaveProperty(threadKey);
-    expect(store).toHaveProperty("newest");
-    expect(store).toHaveProperty("recent");
-    expect(store.oldest).toBeUndefined();
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("hook:newest");
+    expect(store).toHaveProperty("hook:recent");
+    expect(store["hook:oldest"]).toBeUndefined();
+    expect(store["hook:old"]).toBeUndefined();
   });
 
   it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
@@ -748,30 +753,30 @@ describe("capEntryCount", () => {
     const lockedKey = "agent:main:harness-owned:locked";
     const store = makeStore([
       [lockedKey, { ...makeEntry(now - 10 * DAY_MS), modelSelectionLocked: true }],
-      ["recent", makeEntry(now)],
-      ["old", makeEntry(now - DAY_MS)],
+      ["hook:recent", makeEntry(now)],
+      ["hook:old", makeEntry(now - DAY_MS)],
     ]);
 
     const evicted = capEntryCount(store, 2);
 
     expect(evicted).toBe(1);
     expect(store).toHaveProperty(lockedKey);
-    expect(store).toHaveProperty("recent");
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("hook:recent");
+    expect(store["hook:old"]).toBeUndefined();
   });
 
   it("preserves archived sessions when capping", () => {
     const now = Date.now();
     const store = makeStore([
       ["archived", { ...makeEntry(now - 10 * DAY_MS), archivedAt: now - 5 * DAY_MS }],
-      ["recent", makeEntry(now)],
-      ["old", makeEntry(now - DAY_MS)],
+      ["hook:recent", makeEntry(now)],
+      ["hook:old", makeEntry(now - DAY_MS)],
     ]);
 
-    expect(capEntryCount(store, 2)).toBe(1);
+    expect(capEntryCount(store, 2)).toBe(0);
     expect(store).toHaveProperty("archived");
-    expect(store).toHaveProperty("recent");
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("hook:recent");
+    expect(store).toHaveProperty("hook:old");
   });
 
   it("preserves runtime-provided pending subagent sessions when capping", () => {
@@ -779,9 +784,9 @@ describe("capEntryCount", () => {
     const childKey = "agent:main:subagent:child";
     const store = makeStore([
       [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["recent-2", makeEntry(now - 1)],
-      ["old", makeEntry(now - 2)],
+      ["hook:recent-1", makeEntry(now)],
+      ["hook:recent-2", makeEntry(now - 1)],
+      ["hook:old", makeEntry(now - 2)],
     ]);
     const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
 
@@ -793,9 +798,9 @@ describe("capEntryCount", () => {
       expect(evicted).toBe(2);
       expect(Object.keys(store)).toHaveLength(2);
       expect(store).toHaveProperty(childKey);
-      expect(store).toHaveProperty("recent-1");
-      expect(store["recent-2"]).toBeUndefined();
-      expect(store.old).toBeUndefined();
+      expect(store).toHaveProperty("hook:recent-1");
+      expect(store["hook:recent-2"]).toBeUndefined();
+      expect(store["hook:old"]).toBeUndefined();
     } finally {
       unregister();
     }
@@ -806,8 +811,8 @@ describe("capEntryCount", () => {
     const childKey = "agent:main:subagent:child";
     const store = makeStore([
       [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["old", makeEntry(now - 1)],
+      ["hook:recent-1", makeEntry(now)],
+      ["hook:old", makeEntry(now - 1)],
     ]);
     // Provider returns the key in mixed case + with surrounding whitespace;
     // normalization must match the lowercased store key during maintenance.
@@ -823,8 +828,8 @@ describe("capEntryCount", () => {
       expect(evicted).toBe(1);
       expect(Object.keys(store)).toHaveLength(2);
       expect(store).toHaveProperty(childKey);
-      expect(store).toHaveProperty("recent-1");
-      expect(store.old).toBeUndefined();
+      expect(store).toHaveProperty("hook:recent-1");
+      expect(store["hook:old"]).toBeUndefined();
     } finally {
       unregister();
     }
@@ -961,10 +966,13 @@ describe("isProtectedSessionMaintenanceEntry", () => {
 });
 
 describe("resolveMaintenanceConfigFromInput", () => {
-  it("defaults to enforcing session maintenance", () => {
+  it("defaults to enforcing a 5,000-session cap and honors an explicit cap", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+    expect(maintenance.maxEntries).toBe(5_000);
+    expect(resolveSessionEntryMaintenanceHighWater(maintenance.maxEntries)).toBe(5_500);
+    expect(resolveMaintenanceConfigFromInput({ maxEntries: 3 }).maxEntries).toBe(3);
   });
 
   it("defaults gateway model-run probes to fixed 24h retention", () => {
@@ -1090,15 +1098,15 @@ describe("getActiveSessionMaintenanceWarning", () => {
   it("warns when the active session is outside the retained recent entries", () => {
     const now = Date.now();
     const store = makeStore([
-      ["newest", makeEntry(now)],
-      ["recent", makeEntry(now - 1)],
-      ["active", makeEntry(now - 2)],
-      ["old", makeEntry(now - 3)],
+      ["hook:newest", makeEntry(now)],
+      ["hook:recent", makeEntry(now - 1)],
+      ["hook:active", makeEntry(now - 2)],
+      ["hook:old", makeEntry(now - 3)],
     ]);
 
     const warning = getActiveSessionMaintenanceWarning({
       store,
-      activeSessionKey: "active",
+      activeSessionKey: "hook:active",
       pruneAfterMs: DAY_MS,
       maxEntries: 2,
       nowMs: now,
@@ -1112,13 +1120,13 @@ describe("getActiveSessionMaintenanceWarning", () => {
     const now = Date.now();
     const store = makeStore([
       ["same-before", makeEntry(now)],
-      ["active", makeEntry(now)],
+      ["hook:active", makeEntry(now)],
       ["same-after", makeEntry(now)],
     ]);
 
     const warning = getActiveSessionMaintenanceWarning({
       store,
-      activeSessionKey: "active",
+      activeSessionKey: "hook:active",
       pruneAfterMs: DAY_MS,
       maxEntries: 1,
       nowMs: now,

@@ -52,5 +52,5 @@ it("uses enforcement preservation when predicting active-session eviction", asyn
   expect(onWarn).not.toHaveBeenCalled();
   expect(enforcedStore).toHaveProperty("archived");
   expect(enforcedStore).toHaveProperty("active");
-  expect(enforcedStore.recent).toBeUndefined();
+  expect(enforcedStore.recent).toEqual(createStore().recent);
 });

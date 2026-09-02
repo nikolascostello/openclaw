@@ -4,7 +4,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const maintenanceState = vi.hoisted(() => ({ modelRunPruneAfterMs: 24 * 60 * 60 * 1000 }));
+const maintenanceState = vi.hoisted(() => ({
+  modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
+  maxEntries: 2,
+}));
 
 vi.mock("./store-maintenance-runtime.js", () => ({
   resolveMaintenanceConfig: () => ({
@@ -12,7 +15,7 @@ vi.mock("./store-maintenance-runtime.js", () => ({
     pruneAfterMs: 30 * DAY_MS,
     archiveDashboardAfterMs: null,
     modelRunPruneAfterMs: maintenanceState.modelRunPruneAfterMs,
-    maxEntries: 2,
+    maxEntries: maintenanceState.maxEntries,
     preserveRecentMs: null,
     resetArchiveRetentionMs: null,
     maxDiskBytes: null,
@@ -31,13 +34,15 @@ describe("sessions cleanup model-run preview", () => {
   });
 
   it.each([
-    { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0 },
-    { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1 },
-    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 1 },
+    { modelRunPruneAfterMs: DAY_MS, maxEntries: 2, modelRunPruned: 1, archived: 0 },
+    { modelRunPruneAfterMs: 0, maxEntries: 2, modelRunPruned: 0, archived: 1 },
+    { modelRunPruneAfterMs: -DAY_MS, maxEntries: 2, modelRunPruned: 0, archived: 1 },
+    { modelRunPruneAfterMs: DAY_MS, maxEntries: 3, modelRunPruned: 0, archived: 0 },
   ])(
-    "previews model-run retention $modelRunPruneAfterMs before capping",
-    async ({ modelRunPruneAfterMs, modelRunPruned, capped }) => {
+    "previews model-run retention $modelRunPruneAfterMs under active cap $maxEntries",
+    async ({ modelRunPruneAfterMs, maxEntries, modelRunPruned, archived }) => {
       maintenanceState.modelRunPruneAfterMs = modelRunPruneAfterMs;
+      maintenanceState.maxEntries = maxEntries;
       const storePath = path.join(
         tempDirs.make("openclaw-cleanup-model-run-"),
         "agents",
@@ -61,6 +66,10 @@ describe("sessions cleanup model-run preview", () => {
         { sessionKey: "agent:main:active", storePath },
         { sessionId: "session-active", updatedAt: now },
       );
+      replaceSessionEntrySync(
+        { sessionKey: "agent:main:archived", storePath },
+        { sessionId: "session-archived", updatedAt: now - 3 * DAY_MS, archivedAt: now },
+      );
 
       const result = await runSessionsCleanup({
         cfg: {},
@@ -69,9 +78,17 @@ describe("sessions cleanup model-run preview", () => {
       });
 
       const preview = result.previewResults[0];
-      expect(preview?.summary).toMatchObject({ modelRunPruned, capped, afterCount: 2 });
+      expect(preview?.summary).toMatchObject({
+        modelRunPruned,
+        capped: 0,
+        archived,
+        afterCount: 4 - modelRunPruned,
+        afterActiveCount: maxEntries,
+      });
       expect(preview?.modelRunPrunedKeys.has(modelRunSessionKey)).toBe(modelRunPruned === 1);
-      expect(preview?.cappedKeys.has(oldSessionKey)).toBe(capped === 1);
+      expect(preview?.archivedKeys?.get(oldSessionKey)).toBe(
+        archived ? "archive-overflow" : undefined,
+      );
     },
   );
 });

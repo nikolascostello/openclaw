@@ -63,6 +63,7 @@ import {
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 // Live-entry pruning owner. Produces plans inside writes; finalizes archives afterward.
 
@@ -360,7 +361,7 @@ export function applySessionEntryMaintenance(
 
   // Key projections and indexed age candidates keep unrelated entry payloads out
   // of automatic maintenance. Exact full entries load only for rows selected to change.
-  const entryCount = readSessionEntryCount(database);
+  const entryCount = readSessionEntryCount(database, { excludeArchived: true });
   const activeSessionKeys = uniqueStrings([
     params.activeSessionKey ?? "",
     ...(params.activeSessionKeys ?? []),
@@ -399,7 +400,6 @@ export function applySessionEntryMaintenance(
     ({ key }: { key: string }) => {
       removalReasons.set(key, maintenanceReason);
     };
-  let remainingEntryCount = entryCount;
   let modelRunPruned = 0;
   if (runModelRunPrune) {
     modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
@@ -408,23 +408,25 @@ export function applySessionEntryMaintenance(
       preserveKeys,
       preserveRecentMs: maintenance.preserveRecentMs,
     });
-    remainingEntryCount -= modelRunPruned;
   }
-  const archivedKeys = new Set<string>();
-  const archived = archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
+  const archivedEntries = new Map<string, SessionEntry>();
+  const onArchived = ({ key, entry }: { key: string; entry: SessionEntry }) => {
+    archivedEntries.set(key, entry);
+  };
+  archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
     log: false,
-    onArchived: ({ key }) => {
-      archivedKeys.add(key);
-    },
+    onArchived,
     preserveKeys,
+    preserveRecentMs: maintenance.preserveRecentMs,
   });
   const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
     log: false,
     onPruned: rememberRemoval("pruned"),
+    onArchived,
     preserveKeys,
     preserveRecentMs: maintenance.preserveRecentMs,
   });
-  remainingEntryCount -= pruned;
+  const remainingEntryCount = entryCount - modelRunPruned - pruned - archivedEntries.size;
   let capped = 0;
   if (
     shouldRunSessionEntryMaintenance({
@@ -437,32 +439,27 @@ export function applySessionEntryMaintenance(
     if (overflow > 0) {
       const capStore = readSessionMaintenanceCapCandidates({
         database,
-        excludedKeys: new Set(removalReasons.keys()),
+        excludedKeys: new Set([...removalReasons.keys(), ...archivedEntries.keys()]),
         overflow,
         preserveKeys,
         preserveRecentMs: maintenance.preserveRecentMs,
       });
-      for (const key of archivedKeys) {
-        const archivedEntry = store[key];
-        if (archivedEntry && capStore[key]) {
-          capStore[key] = archivedEntry;
-        }
-      }
       capped = capEntryCount(capStore, Object.keys(capStore).length - overflow, {
         log: false,
         onCapped: rememberRemoval("capped"),
+        onArchived,
         preserveKeys,
         preserveRecentMs: maintenance.preserveRecentMs,
       });
     }
   }
-  const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+  const archived = archivedEntries.size;
+  const selectedKeys = uniqueStrings([...archivedEntries.keys(), ...removalReasons.keys()]);
   const selectedEntries = readSessionEntryStore(database, { sessionKeys: selectedKeys });
   const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
-  for (const key of archivedKeys) {
+  for (const [key, planned] of archivedEntries) {
     const entry = selectedEntries[key];
-    const planned = store[key];
-    if (!entry || !planned?.archivedAt) {
+    if (!entry) {
       continue;
     }
     entry.archivedAt = planned.archivedAt;

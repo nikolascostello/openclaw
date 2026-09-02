@@ -240,11 +240,15 @@ export function readSessionEntryStore(
   return store;
 }
 
-export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
+export function readSessionEntryCount(
+  database: OpenClawAgentDatabase,
+  options: { excludeArchived?: boolean } = {},
+): number {
   const db = getSessionKysely(database.db);
+  const query = db.selectFrom("session_nodes").select(sessionEntryInventoryJson);
   const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(sessionEntryInventoryJson),
+    options.excludeArchived ? query.where("archived_at", "is", null) : query,
   );
   let count = 0;
   for (const row of rows) {

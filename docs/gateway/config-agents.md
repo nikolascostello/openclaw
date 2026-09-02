@@ -1291,7 +1291,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
       archiveDashboardAfter: "7d", // false or 0 disables
-      maxEntries: 500,
+      maxEntries: 5000,
       preserveRecent: "7d", // optional duration or false
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional hard budget
@@ -1336,14 +1336,14 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
-  - `pruneAfter`: age cutoff for stale entries (default `30d`).
-  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables automatic archiving.
-  - `maxEntries`: maximum total number of live SQLite session entries (default `500`). Every row counts toward the cap, but archived or pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers are never automatic eviction targets. Cleanup removes the oldest unprotected rows; if protection prevents reaching the cap, the store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows. Unarchive, unpin, wait for active work to finish, or explicitly delete protected sessions to reduce the total.
+  - `pruneAfter`: age cutoff for stale entries (default `30d`). Eligible durable conversations archive in place; disposable runtime entries retain their deletion rules.
+  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables this dashboard-specific cutoff, not age/count archival.
+  - `maxEntries`: maximum unarchived SQLite session entries (default `5000`). Archived rows do not count. Count pressure archives eligible durable conversations without deleting their history; disposable runtime entries retain their deletion rules. Main, pinned, model-locked, running or admitted sessions, and routable direct, group, or thread conversations are protected. Protected unarchived rows can keep the store above its cap. Runtime writes use a 10% high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately without removing protection or stopping active work.
   - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
-  - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
-  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first. Set `false`, `0`, or `"0"` to disable the budget entirely.
+  - `resetArchiveRetention`: age-based retention for reset/deleted transcript artifacts, not in-place session archives or retained SQLite history. By default there is no age cutoff; set a duration to opt into artifact-age cleanup, or `false` to disable it explicitly. See [archive cleanup scope](/reference/session-management-compaction#store-maintenance-and-disk-controls).
+  - `maxDiskBytes`: per-agent session disk budget (default `"10gb"`, 10 GiB), including the SQLite main file, WAL, and session artifacts. In `warn` mode it reports overage; in `enforce` mode it reclaims eligible artifacts and unprotected historical windows. Archived and pinned logical sessions retain every owned SQLite history generation, so protected data can keep usage above the target. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with `maxDiskBytes`, not with a zero high-water mark.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings
