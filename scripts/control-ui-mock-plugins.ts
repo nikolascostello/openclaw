@@ -5,7 +5,11 @@ import type {
   PluginsInspectResult,
 } from "../packages/gateway-protocol/src/schema/plugins.js";
 
-export function buildPluginCatalogMock() {
+type PluginCatalogMockOptions = {
+  installedCopies?: number;
+};
+
+export function buildPluginCatalogMock(options: PluginCatalogMockOptions = {}) {
   const entry = (params: {
     id: string;
     name: string;
@@ -30,52 +34,63 @@ export function buildPluginCatalogMock() {
     removable: params.installed && params.origin !== "bundled",
     ...(params.install ? { install: params.install } : {}),
   });
+  const plugins = [
+    entry({
+      id: "telegram",
+      name: "Telegram",
+      description: "Chat with your agent from Telegram DMs and groups.",
+      category: "channel",
+      origin: "bundled",
+      installed: true,
+    }),
+    entry({
+      id: "discord",
+      name: "Discord",
+      description: "Bridge agents into Discord servers and DMs.",
+      category: "channel",
+      origin: "global",
+      installed: true,
+      enabled: false,
+    }),
+    entry({
+      id: "memory-wiki",
+      name: "Memory Wiki",
+      description: "Long-term wiki-style memory for people and projects.",
+      category: "memory",
+      origin: "bundled",
+      installed: true,
+    }),
+    entry({
+      id: "browser",
+      name: "Browser",
+      description: "Drive a managed browser profile for research and automation.",
+      category: "tool",
+      origin: "official",
+      installed: false,
+      featured: true,
+      install: { source: "official", pluginId: "browser" },
+    }),
+    entry({
+      id: "canvas",
+      name: "Canvas",
+      description: "Generate and preview visual artifacts from sessions.",
+      category: "tool",
+      origin: "official",
+      installed: false,
+      install: { source: "official", pluginId: "canvas" },
+    }),
+  ];
+  const installedCopies = Math.max(1, Math.floor(options.installedCopies ?? 1));
+  const installed = plugins.filter((plugin) => plugin.installed);
+  const available = plugins.filter((plugin) => !plugin.installed);
   return {
     plugins: [
-      entry({
-        id: "telegram",
-        name: "Telegram",
-        description: "Chat with your agent from Telegram DMs and groups.",
-        category: "channel",
-        origin: "bundled",
-        installed: true,
-      }),
-      entry({
-        id: "discord",
-        name: "Discord",
-        description: "Bridge agents into Discord servers and DMs.",
-        category: "channel",
-        origin: "global",
-        installed: true,
-        enabled: false,
-      }),
-      entry({
-        id: "memory-wiki",
-        name: "Memory Wiki",
-        description: "Long-term wiki-style memory for people and projects.",
-        category: "memory",
-        origin: "bundled",
-        installed: true,
-      }),
-      entry({
-        id: "browser",
-        name: "Browser",
-        description: "Drive a managed browser profile for research and automation.",
-        category: "tool",
-        origin: "official",
-        installed: false,
-        featured: true,
-        install: { source: "official", pluginId: "browser" },
-      }),
-      entry({
-        id: "canvas",
-        name: "Canvas",
-        description: "Generate and preview visual artifacts from sessions.",
-        category: "tool",
-        origin: "official",
-        installed: false,
-        install: { source: "official", pluginId: "canvas" },
-      }),
+      ...installed.flatMap((plugin) =>
+        Array.from({ length: installedCopies }, (_, index) =>
+          index === 0 ? plugin : { ...plugin, id: `${plugin.id}-copy-${index + 1}` },
+        ),
+      ),
+      ...available,
     ],
     diagnostics: [],
     mutationAllowed: true,
@@ -83,7 +98,7 @@ export function buildPluginCatalogMock() {
 }
 
 /** Parameterized plugins.inspect fixtures for the consent dialog and detail overlay. */
-export function buildPluginInspectMock() {
+export function buildPluginInspectMock(options: PluginCatalogMockOptions = {}) {
   const emptyDeclared: PluginDeclaredSurface = {
     channels: [],
     providers: [],
@@ -161,8 +176,9 @@ export function buildPluginInspectMock() {
       },
     ],
   ]);
-  const cases = buildPluginCatalogMock().plugins.map((plugin) => {
-    const fixture = fixtures.get(plugin.id);
+  const cases = buildPluginCatalogMock(options).plugins.map((plugin) => {
+    const fixtureId = plugin.id.replace(/-copy-\d+$/u, "");
+    const fixture = fixtures.get(fixtureId);
     if (!fixture) {
       throw new Error(`Mock inspection is missing for plugin "${plugin.id}".`);
     }
